@@ -57,6 +57,7 @@ const discord_1 = require("./discord");
 const audit_1 = require("./audit");
 const i18n_1 = require("./i18n");
 const zod_1 = require("zod");
+const reaction_roles_1 = require("./reaction-roles");
 const categoriesTable = `SELECT id,name,description,emoji,discord_category_id,support_role_ids,enabled,sort_order FROM categories`;
 const mutationRoles = ['support', 'supervisor', 'admin'];
 const adminRoles = ['admin'];
@@ -361,7 +362,7 @@ function createWebApp(client) {
             const channels = [...g.channels.cache.values()].filter(c => c.type === discord_js_1.ChannelType.GuildText).map(c => ({ id: c.id, name: c.name })).sort((a, b) => a.name.localeCompare(b.name));
             const canManageRoles = botMember.permissions.has(discord_js_1.PermissionFlagsBits.ManageRoles);
             const roles = [...g.roles.cache.values()].filter(r => r.id !== g.id && !r.managed && r.tags?.botId !== client.user?.id).map(r => ({ id: r.id, name: r.name, position: r.position, assignable: canManageRoles && r.editable })).sort((a, b) => b.position - a.position);
-            res.json({ panel: (0, db_1.getSetting)('reactionRolePanel', { channelId: '', messageId: '', title: 'Choose your roles', description: 'React below to get or remove a role.', mappings: [] }), channels, roles, canManageRoles });
+            res.json({ panels: (0, reaction_roles_1.getReactionRolePanels)(), channels, roles, canManageRoles });
         }
         catch (error) {
             console.error('Could not load reaction role settings', error);
@@ -369,11 +370,14 @@ function createWebApp(client) {
         }
     });
     app.post('/api/reaction-roles', auth, (0, auth_1.requireRole)('admin'), async (req, res) => {
-        const schema = zod_1.z.object({ channelId: zod_1.z.string().regex(/^\d{17,20}$/), title: zod_1.z.string().trim().min(1).max(256), description: zod_1.z.string().trim().max(1600), mappings: zod_1.z.array(zod_1.z.object({ emoji: zod_1.z.string().trim().min(1).max(40), roleId: zod_1.z.string().regex(/^\d{17,20}$/) })).min(1).max(20) });
+        const schema = zod_1.z.object({ messageId: zod_1.z.string().regex(/^\d{17,20}$/).or(zod_1.z.literal('')).optional(), channelId: zod_1.z.string().regex(/^\d{17,20}$/), title: zod_1.z.string().trim().min(1).max(256), description: zod_1.z.string().trim().max(1600), mappings: zod_1.z.array(zod_1.z.object({ emoji: zod_1.z.string().trim().min(1).max(40), roleId: zod_1.z.string().regex(/^\d{17,20}$/) })).min(1).max(20) });
         const parsed = schema.safeParse(req.body);
         if (!parsed.success)
             return res.status(400).json({ error: 'Add a channel and between 1 and 20 valid emoji-to-role mappings.' });
-        const { channelId, title, description, mappings } = parsed.data;
+        const { channelId, title, description, mappings } = parsed.data, messageId = parsed.data.messageId || '';
+        const currentPanels = (0, reaction_roles_1.getReactionRolePanels)(), editing = messageId ? currentPanels.find(panel => panel.messageId === messageId) : undefined;
+        if (messageId && !editing)
+            return res.status(404).json({ error: 'Reaction role panel not found.' });
         const emojiKey = (value) => value.match(/^<a?:[A-Za-z0-9_]+:(\d+)>$/)?.[1] || value;
         const keys = mappings.map(item => emojiKey(item.emoji));
         if (new Set(keys).size !== keys.length)
@@ -403,12 +407,12 @@ function createWebApp(client) {
                 await sent.delete().catch(() => undefined);
                 throw error;
             }
-            const previous = (0, db_1.getSetting)('reactionRolePanel', { channelId: '', messageId: '' });
-            (0, db_1.setSetting)('reactionRolePanel', { channelId, messageId: sent.id, title, description, mappings: resolved.map(item => ({ emoji: item.emoji, emojiKey: item.emojiKey, roleId: item.role.id })) });
-            if (previous.messageId) {
-                const oldChannel = await g.channels.fetch(previous.channelId).catch(() => null);
+            const updated = { channelId, messageId: sent.id, title, description, mappings: resolved.map(item => ({ emoji: item.emoji, emojiKey: item.emojiKey, roleId: item.role.id })) };
+            (0, reaction_roles_1.saveReactionRolePanels)(editing ? currentPanels.map(panel => panel.messageId === editing.messageId ? updated : panel) : [...currentPanels, updated]);
+            if (editing) {
+                const oldChannel = await g.channels.fetch(editing.channelId).catch(() => null);
                 if (oldChannel?.type === discord_js_1.ChannelType.GuildText) {
-                    const oldMessage = await oldChannel.messages.fetch(previous.messageId).catch(() => null);
+                    const oldMessage = await oldChannel.messages.fetch(editing.messageId).catch(() => null);
                     if (oldMessage)
                         await oldMessage.delete().catch(() => undefined);
                 }
@@ -419,6 +423,26 @@ function createWebApp(client) {
         catch (error) {
             console.error('Could not publish reaction role panel', error);
             res.status(502).json({ error: 'Could not publish the reaction role message. Check the bot permissions and emoji values.' });
+        }
+    });
+    app.delete('/api/reaction-roles/:messageId', auth, (0, auth_1.requireRole)('admin'), async (req, res) => {
+        const messageId = String(req.params.messageId), panels = (0, reaction_roles_1.getReactionRolePanels)(), panel = panels.find(entry => entry.messageId === messageId);
+        if (!panel)
+            return res.status(404).json({ error: 'Reaction role panel not found.' });
+        try {
+            const channel = await client.channels.fetch(panel.channelId).catch(() => null);
+            if (channel?.type === discord_js_1.ChannelType.GuildText) {
+                const message = await channel.messages.fetch(messageId).catch(() => null);
+                if (message)
+                    await message.delete();
+            }
+            (0, reaction_roles_1.saveReactionRolePanels)(panels.filter(entry => entry.messageId !== messageId));
+            addAdminLog(client, req.authUser.id, 'reaction_roles_deleted', `${panel.channelId}:${messageId}`);
+            res.json({ ok: true });
+        }
+        catch (error) {
+            console.error('Could not delete reaction role panel', error);
+            res.status(502).json({ error: 'Could not remove the reaction role message. Check the bot permissions.' });
         }
     });
     app.get('/api/settings', auth, (0, auth_1.requireRole)('readonly'), (_req, res) => res.json({

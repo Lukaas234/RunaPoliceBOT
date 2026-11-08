@@ -18,6 +18,7 @@ import { refreshPanel } from './discord';
 import { recordSystemError, sendAudit } from './audit';
 import { localized, tr } from './i18n';
 import { z } from 'zod';
+import { getReactionRolePanels, saveReactionRolePanels } from './reaction-roles';
 
 const categoriesTable=`SELECT id,name,description,emoji,discord_category_id,support_role_ids,enabled,sort_order FROM categories`;
 const mutationRoles=['support','supervisor','admin'] as const;
@@ -207,13 +208,15 @@ export function createWebApp(client:Client) {
       const channels=[...g.channels.cache.values()].filter(c=>c.type===ChannelType.GuildText).map(c=>({id:c.id,name:c.name})).sort((a,b)=>a.name.localeCompare(b.name));
       const canManageRoles=botMember.permissions.has(PermissionFlagsBits.ManageRoles);
       const roles=[...g.roles.cache.values()].filter(r=>r.id!==g.id&&!r.managed&&r.tags?.botId!==client.user?.id).map(r=>({id:r.id,name:r.name,position:r.position,assignable:canManageRoles&&r.editable})).sort((a,b)=>b.position-a.position);
-      res.json({panel:getSetting('reactionRolePanel',{channelId:'',messageId:'',title:'Choose your roles',description:'React below to get or remove a role.',mappings:[]}),channels,roles,canManageRoles});
+      res.json({panels:getReactionRolePanels(),channels,roles,canManageRoles});
     } catch(error){console.error('Could not load reaction role settings',error);res.status(502).json({error:'Could not load channels and roles from Discord.'});}
   });
   app.post('/api/reaction-roles',auth,requireRole('admin'),async(req,res)=>{
-    const schema=z.object({channelId:z.string().regex(/^\d{17,20}$/),title:z.string().trim().min(1).max(256),description:z.string().trim().max(1600),mappings:z.array(z.object({emoji:z.string().trim().min(1).max(40),roleId:z.string().regex(/^\d{17,20}$/)})).min(1).max(20)});
+    const schema=z.object({messageId:z.string().regex(/^\d{17,20}$/).or(z.literal('')).optional(),channelId:z.string().regex(/^\d{17,20}$/),title:z.string().trim().min(1).max(256),description:z.string().trim().max(1600),mappings:z.array(z.object({emoji:z.string().trim().min(1).max(40),roleId:z.string().regex(/^\d{17,20}$/)})).min(1).max(20)});
     const parsed=schema.safeParse(req.body);if(!parsed.success)return res.status(400).json({error:'Add a channel and between 1 and 20 valid emoji-to-role mappings.'});
-    const {channelId,title,description,mappings}=parsed.data;
+    const {channelId,title,description,mappings}=parsed.data,messageId=parsed.data.messageId||'';
+    const currentPanels=getReactionRolePanels(),editing=messageId?currentPanels.find(panel=>panel.messageId===messageId):undefined;
+    if(messageId&&!editing)return res.status(404).json({error:'Reaction role panel not found.'});
     const emojiKey=(value:string)=>value.match(/^<a?:[A-Za-z0-9_]+:(\d+)>$/)?.[1]||value;
     const keys=mappings.map(item=>emojiKey(item.emoji));if(new Set(keys).size!==keys.length)return res.status(400).json({error:'Each reaction emoji can only be used once.'});
     if(new Set(mappings.map(item=>item.roleId)).size!==mappings.length)return res.status(400).json({error:'Each role can only be used once in a reaction panel.'});
@@ -230,12 +233,21 @@ export function createWebApp(client:Client) {
       const sent=await (channel as TextChannel).send({embeds:[embed],allowedMentions:{parse:[]}});
       try {for(const item of resolved)await sent.react(item.emojiKey);}
       catch(error){await sent.delete().catch(()=>undefined);throw error;}
-      const previous=getSetting<{channelId:string;messageId:string}>('reactionRolePanel',{channelId:'',messageId:''});
-      setSetting('reactionRolePanel',{channelId,messageId:sent.id,title,description,mappings:resolved.map(item=>({emoji:item.emoji,emojiKey:item.emojiKey,roleId:item.role!.id}))});
-      if(previous.messageId){const oldChannel=await g.channels.fetch(previous.channelId).catch(()=>null);if(oldChannel?.type===ChannelType.GuildText){const oldMessage=await oldChannel.messages.fetch(previous.messageId).catch(()=>null);if(oldMessage)await oldMessage.delete().catch(()=>undefined);}}
+      const updated={channelId,messageId:sent.id,title,description,mappings:resolved.map(item=>({emoji:item.emoji,emojiKey:item.emojiKey,roleId:item.role!.id}))};
+      saveReactionRolePanels(editing?currentPanels.map(panel=>panel.messageId===editing.messageId?updated:panel):[...currentPanels,updated]);
+      if(editing){const oldChannel=await g.channels.fetch(editing.channelId).catch(()=>null);if(oldChannel?.type===ChannelType.GuildText){const oldMessage=await oldChannel.messages.fetch(editing.messageId).catch(()=>null);if(oldMessage)await oldMessage.delete().catch(()=>undefined);}}
       addAdminLog(client,req.authUser!.id,'reaction_roles_published',`${channelId}:${sent.id}`);
       res.json({ok:true,messageId:sent.id,channelId});
     } catch(error){console.error('Could not publish reaction role panel',error);res.status(502).json({error:'Could not publish the reaction role message. Check the bot permissions and emoji values.'});}
+  });
+  app.delete('/api/reaction-roles/:messageId',auth,requireRole('admin'),async(req,res)=>{
+    const messageId=String(req.params.messageId),panels=getReactionRolePanels(),panel=panels.find(entry=>entry.messageId===messageId);
+    if(!panel)return res.status(404).json({error:'Reaction role panel not found.'});
+    try {
+      const channel=await client.channels.fetch(panel.channelId).catch(()=>null);
+      if(channel?.type===ChannelType.GuildText){const message=await channel.messages.fetch(messageId).catch(()=>null);if(message)await message.delete();}
+      saveReactionRolePanels(panels.filter(entry=>entry.messageId!==messageId));addAdminLog(client,req.authUser!.id,'reaction_roles_deleted',`${panel.channelId}:${messageId}`);res.json({ok:true});
+    } catch(error){console.error('Could not delete reaction role panel',error);res.status(502).json({error:'Could not remove the reaction role message. Check the bot permissions.'});}
   });
   app.get('/api/settings',auth,requireRole('readonly'),(_req,res)=>res.json({
     panelMessage:getSetting('panelMessage','Choose a category to open a private ticket.'),welcomeMessage:getSetting('welcomeMessage','Describe your issue for the support team.'),panelChannelId:getSetting('panelChannelId',DEFAULT_PANEL_CHANNEL_ID)||DEFAULT_PANEL_CHANNEL_ID,

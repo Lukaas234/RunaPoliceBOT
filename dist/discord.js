@@ -13,6 +13,7 @@ const audit_1 = require("./audit");
 const i18n_1 = require("./i18n");
 const server_defaults_1 = require("./server-defaults");
 const community_1 = require("./community");
+const reaction_roles_1 = require("./reaction-roles");
 exports.client = new discord_js_1.Client({ intents: [discord_js_1.GatewayIntentBits.Guilds, discord_js_1.GatewayIntentBits.GuildMessages, discord_js_1.GatewayIntentBits.MessageContent, discord_js_1.GatewayIntentBits.GuildMessageReactions], partials: [discord_js_1.Partials.Message, discord_js_1.Partials.Channel, discord_js_1.Partials.Reaction] });
 // Discord's command UI permission hint is intentionally broad; every action is checked again server-side.
 const staffCommand = (c) => c;
@@ -495,8 +496,8 @@ async function handleReactionRole(reaction, user, action) {
         const message = reaction.message.partial ? await reaction.message.fetch() : reaction.message;
         if (!message.guild)
             return;
-        const panel = (0, db_1.getSetting)('reactionRolePanel', { messageId: '', mappings: [] });
-        if (!panel.messageId || panel.messageId !== message.id)
+        const panel = (0, reaction_roles_1.getReactionRolePanels)().find(entry => entry.messageId === message.id);
+        if (!panel)
             return;
         const emojiKey = reaction.emoji.id || reaction.emoji.name;
         const mapping = panel.mappings.find(item => item.emojiKey === emojiKey || item.emoji === emojiKey);
@@ -508,8 +509,30 @@ async function handleReactionRole(reaction, user, action) {
             return;
         if (action === 'add')
             await member.roles.add(role, 'Reaction role assignment');
-        else
+        else {
+            const otherPanels = (0, reaction_roles_1.getReactionRolePanels)().filter(entry => entry.messageId !== message.id && entry.mappings.some(item => item.roleId === role.id));
+            for (const other of otherPanels) {
+                const otherChannel = await guild.channels.fetch(other.channelId).catch(() => null);
+                if (!otherChannel || otherChannel.type !== discord_js_1.ChannelType.GuildText)
+                    continue;
+                const otherMessage = await otherChannel.messages.fetch(other.messageId).catch(() => null);
+                if (!otherMessage)
+                    continue;
+                let stillReacted = false;
+                for (const item of other.mappings.filter(item => item.roleId === role.id)) {
+                    const otherKey = item.emojiKey || item.emoji, found = otherMessage.reactions.cache.find((r) => (r.emoji.id || r.emoji.name) === otherKey);
+                    if (found && (await found.users.fetch()).has(user.id)) {
+                        stillReacted = true;
+                        break;
+                    }
+                }
+                if (stillReacted) {
+                    await member.roles.add(role, 'Reaction role retained for another panel');
+                    return;
+                }
+            }
             await member.roles.remove(role, 'Reaction role removal');
+        }
     }
     catch (error) {
         (0, audit_1.recordSystemError)(exports.client, error, `Reaction role ${action}`);

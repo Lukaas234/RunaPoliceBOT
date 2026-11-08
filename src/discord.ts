@@ -11,6 +11,7 @@ import { recordSystemError, sendAudit } from './audit';
 import { AppLanguage, localized, tr } from './i18n';
 import { DEFAULT_ES_PANEL_CHANNEL_ID, DEFAULT_PANEL_CHANNEL_ID } from './server-defaults';
 import { communityListEmbed, createCommunityPost, handleCommunityButton, inspectForumReaction, listPendingCommunityPosts, recoverCommunityQueue, scanActiveForumThreads, CommunityKind } from './community';
+import { getReactionRolePanels } from './reaction-roles';
 
 export const client=new Client({intents:[GatewayIntentBits.Guilds,GatewayIntentBits.GuildMessages,GatewayIntentBits.MessageContent,GatewayIntentBits.GuildMessageReactions],partials:[Partials.Message,Partials.Channel,Partials.Reaction]});
 // Discord's command UI permission hint is intentionally broad; every action is checked again server-side.
@@ -308,8 +309,8 @@ async function handleReactionRole(reaction:any,user:any,action:'add'|'remove') {
     if(reaction.partial)await reaction.fetch();
     const message=reaction.message.partial?await reaction.message.fetch():reaction.message;
     if(!message.guild)return;
-    const panel=getSetting<{messageId:string;mappings:{emoji:string;emojiKey?:string;roleId:string}[]}>('reactionRolePanel',{messageId:'',mappings:[]});
-    if(!panel.messageId||panel.messageId!==message.id)return;
+    const panel=getReactionRolePanels().find(entry=>entry.messageId===message.id);
+    if(!panel)return;
     const emojiKey=reaction.emoji.id||reaction.emoji.name;
     const mapping=panel.mappings.find(item=>item.emojiKey===emojiKey||item.emoji===emojiKey);
     if(!mapping)return;
@@ -317,7 +318,21 @@ async function handleReactionRole(reaction:any,user:any,action:'add'|'remove') {
     const botMember=guild.members.me;
     if(!role||!botMember?.permissions.has(PermissionFlagsBits.ManageRoles)||role.position>=botMember.roles.highest.position)return;
     if(action==='add')await member.roles.add(role,'Reaction role assignment');
-    else await member.roles.remove(role,'Reaction role removal');
+    else {
+      const otherPanels=getReactionRolePanels().filter(entry=>entry.messageId!==message.id&&entry.mappings.some(item=>item.roleId===role.id));
+      for(const other of otherPanels) {
+        const otherChannel=await guild.channels.fetch(other.channelId).catch(()=>null);
+        if(!otherChannel||otherChannel.type!==ChannelType.GuildText)continue;
+        const otherMessage=await otherChannel.messages.fetch(other.messageId).catch(()=>null);if(!otherMessage)continue;
+        let stillReacted=false;
+        for(const item of other.mappings.filter(item=>item.roleId===role.id)) {
+          const otherKey=item.emojiKey||item.emoji,found=otherMessage.reactions.cache.find((r:any)=>(r.emoji.id||r.emoji.name)===otherKey);
+          if(found&&(await found.users.fetch()).has(user.id)){stillReacted=true;break;}
+        }
+        if(stillReacted){await member.roles.add(role,'Reaction role retained for another panel');return;}
+      }
+      await member.roles.remove(role,'Reaction role removal');
+    }
   } catch(error) {recordSystemError(client,error,`Reaction role ${action}`);}
 }
 
