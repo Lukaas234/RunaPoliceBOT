@@ -486,7 +486,37 @@ exports.client.on(discord_js_1.Events.InteractionCreate, async (i) => {
         }
     }
 });
+async function handleReactionRole(reaction, user, action) {
+    if (user.bot)
+        return;
+    try {
+        if (reaction.partial)
+            await reaction.fetch();
+        const message = reaction.message.partial ? await reaction.message.fetch() : reaction.message;
+        if (!message.guild)
+            return;
+        const panel = (0, db_1.getSetting)('reactionRolePanel', { messageId: '', mappings: [] });
+        if (!panel.messageId || panel.messageId !== message.id)
+            return;
+        const emojiKey = reaction.emoji.id || reaction.emoji.name;
+        const mapping = panel.mappings.find(item => item.emojiKey === emojiKey || item.emoji === emojiKey);
+        if (!mapping)
+            return;
+        const guild = message.guild, role = await guild.roles.fetch(mapping.roleId), member = await guild.members.fetch(user.id);
+        const botMember = guild.members.me;
+        if (!role || !botMember?.permissions.has(discord_js_1.PermissionFlagsBits.ManageRoles) || role.position >= botMember.roles.highest.position)
+            return;
+        if (action === 'add')
+            await member.roles.add(role, 'Reaction role assignment');
+        else
+            await member.roles.remove(role, 'Reaction role removal');
+    }
+    catch (error) {
+        (0, audit_1.recordSystemError)(exports.client, error, `Reaction role ${action}`);
+    }
+}
 exports.client.on(discord_js_1.Events.MessageReactionAdd, async (reaction, user) => {
+    await handleReactionRole(reaction, user, 'add');
     if (user.bot)
         return;
     try {
@@ -499,6 +529,7 @@ exports.client.on(discord_js_1.Events.MessageReactionAdd, async (reaction, user)
         (0, audit_1.recordSystemError)(exports.client, error, 'Forum reaction tracking');
     }
 });
+exports.client.on(discord_js_1.Events.MessageReactionRemove, (reaction, user) => handleReactionRole(reaction, user, 'remove'));
 exports.client.once(discord_js_1.Events.ClientReady, () => { void (0, community_1.recoverCommunityQueue)(exports.client).then(() => (0, community_1.scanActiveForumThreads)(exports.client)).catch(error => (0, audit_1.recordSystemError)(exports.client, error, 'Community queue startup')); });
 exports.client.once(discord_js_1.Events.ClientReady, c => console.log(`Discord ready as ${c.user.tag}`));
 exports.client.on(discord_js_1.Events.Error, e => (0, audit_1.recordSystemError)(exports.client, e, 'Discord client error'));

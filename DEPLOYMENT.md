@@ -85,3 +85,7 @@ Usa `.env.example` como referencia local. El bot debe tener acceso al servidor y
 ## Límites de esta primera entrega
 
 La app corre como un proceso y expone el bot y el panel en el mismo deployment. Un fallo total del proceso afecta ambos componentes; el reinicio automático del hosting ayuda a recuperarlo, pero no los aísla. Valora disponibilidad y copias externas de acuerdo con el uso real. Esta primera entrega ya incluye primera respuesta basada en el primer mensaje del staff, tiempo de resolución, transferencias desde el panel, valoraciones y backup descargable. El cierre automático por inactividad, exportaciones de estadísticas y recordatorios aún no están implementados.
+
+### Reaction roles
+
+Admins can configure one reaction-role message from the dashboard **Reaction roles** section. The bot posts the embed, adds the configured reactions, and assigns/removes each selected role when members add/remove a reaction. In the selected channel it needs View Channel, Send Messages, Embed Links, Add Reactions, and Read Message History. Server-wide it needs Manage Roles, and its highest role must be above all assignable roles. Configure up to 20 distinct emoji-to-role mappings; custom emojis must be available to the bot in this server.

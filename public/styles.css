@@ -3,3 +3,4 @@
 
 
 .login-error{margin:-10px 0 16px;padding:10px 12px;border:1px solid #754049;border-radius:8px;background:#3a2028;color:#ffb1b4;font-size:12px;line-height:1.5;text-align:left}
+.sidebar nav{overflow-y:auto;flex:1}.rr-mappings{display:grid;gap:10px}.rr-row{display:grid;grid-template-columns:minmax(150px,1fr) minmax(190px,1fr) auto;gap:8px}@media(max-width:700px){.rr-row{grid-template-columns:1fr}.rr-row button{justify-self:start}}

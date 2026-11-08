@@ -1,5 +1,5 @@
 import {
-  ActionRowBuilder, ButtonBuilder, ButtonStyle, ChatInputCommandInteraction, Client, Events,
+  ActionRowBuilder, ButtonBuilder, ButtonStyle, ChatInputCommandInteraction, Client, Events, EmbedBuilder,
   GatewayIntentBits, ModalBuilder, PermissionFlagsBits, REST, Routes, SlashCommandBuilder, ChannelType, Partials,
   StringSelectMenuBuilder, TextInputBuilder, TextInputStyle, TextChannel
 } from 'discord.js';
@@ -302,11 +302,32 @@ client.on(Events.InteractionCreate,async i=>{
   }
 });
 
+async function handleReactionRole(reaction:any,user:any,action:'add'|'remove') {
+  if(user.bot)return;
+  try {
+    if(reaction.partial)await reaction.fetch();
+    const message=reaction.message.partial?await reaction.message.fetch():reaction.message;
+    if(!message.guild)return;
+    const panel=getSetting<{messageId:string;mappings:{emoji:string;emojiKey?:string;roleId:string}[]}>('reactionRolePanel',{messageId:'',mappings:[]});
+    if(!panel.messageId||panel.messageId!==message.id)return;
+    const emojiKey=reaction.emoji.id||reaction.emoji.name;
+    const mapping=panel.mappings.find(item=>item.emojiKey===emojiKey||item.emoji===emojiKey);
+    if(!mapping)return;
+    const guild=message.guild,role=await guild.roles.fetch(mapping.roleId),member=await guild.members.fetch(user.id);
+    const botMember=guild.members.me;
+    if(!role||!botMember?.permissions.has(PermissionFlagsBits.ManageRoles)||role.position>=botMember.roles.highest.position)return;
+    if(action==='add')await member.roles.add(role,'Reaction role assignment');
+    else await member.roles.remove(role,'Reaction role removal');
+  } catch(error) {recordSystemError(client,error,`Reaction role ${action}`);}
+}
+
 client.on(Events.MessageReactionAdd,async(reaction,user)=>{
+  await handleReactionRole(reaction,user,'add');
   if(user.bot)return;
   try {if(reaction.partial)await reaction.fetch();const message=reaction.message.partial?await reaction.message.fetch():reaction.message;await inspectForumReaction(client,message);}
   catch(error){recordSystemError(client,error,'Forum reaction tracking');}
 });
+client.on(Events.MessageReactionRemove,(reaction,user)=>handleReactionRole(reaction,user,'remove'));
 client.once(Events.ClientReady,()=>{void recoverCommunityQueue(client).then(()=>scanActiveForumThreads(client)).catch(error=>recordSystemError(client,error,'Community queue startup'));});
 client.once(Events.ClientReady,c=>console.log(`Discord ready as ${c.user.tag}`));
 client.on(Events.Error,e=>recordSystemError(client,e,'Discord client error'));

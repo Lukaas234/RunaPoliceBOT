@@ -352,6 +352,74 @@ function createWebApp(client) {
         void (0, discord_1.refreshPanel)(client).catch(e => console.error('Could not refresh ticket panel', e));
         res.json({ ok: true });
     });
+    app.get('/api/reaction-roles', auth, (0, auth_1.requireRole)('admin'), async (_req, res) => {
+        try {
+            const g = await client.guilds.fetch(config_1.config.DISCORD_GUILD_ID);
+            await g.roles.fetch();
+            await g.channels.fetch();
+            const botMember = g.members.me || await g.members.fetch(client.user.id);
+            const channels = [...g.channels.cache.values()].filter(c => c.type === discord_js_1.ChannelType.GuildText).map(c => ({ id: c.id, name: c.name })).sort((a, b) => a.name.localeCompare(b.name));
+            const roles = [...g.roles.cache.values()].filter(r => r.id !== g.id && !r.managed && r.position < botMember.roles.highest.position).map(r => ({ id: r.id, name: r.name, position: r.position })).sort((a, b) => b.position - a.position);
+            res.json({ panel: (0, db_1.getSetting)('reactionRolePanel', { channelId: '', messageId: '', title: 'Choose your roles', description: 'React below to get or remove a role.', mappings: [] }), channels, roles, canManageRoles: botMember.permissions.has(discord_js_1.PermissionFlagsBits.ManageRoles) });
+        }
+        catch (error) {
+            console.error('Could not load reaction role settings', error);
+            res.status(502).json({ error: 'Could not load channels and roles from Discord.' });
+        }
+    });
+    app.post('/api/reaction-roles', auth, (0, auth_1.requireRole)('admin'), async (req, res) => {
+        const schema = zod_1.z.object({ channelId: zod_1.z.string().regex(/^\d{17,20}$/), title: zod_1.z.string().trim().min(1).max(256), description: zod_1.z.string().trim().max(1600), mappings: zod_1.z.array(zod_1.z.object({ emoji: zod_1.z.string().trim().min(1).max(40), roleId: zod_1.z.string().regex(/^\d{17,20}$/) })).min(1).max(20) });
+        const parsed = schema.safeParse(req.body);
+        if (!parsed.success)
+            return res.status(400).json({ error: 'Add a channel and between 1 and 20 valid emoji-to-role mappings.' });
+        const { channelId, title, description, mappings } = parsed.data;
+        const emojiKey = (value) => value.match(/^<a?:[A-Za-z0-9_]+:(\d+)>$/)?.[1] || value;
+        const keys = mappings.map(item => emojiKey(item.emoji));
+        if (new Set(keys).size !== keys.length)
+            return res.status(400).json({ error: 'Each reaction emoji can only be used once.' });
+        if (new Set(mappings.map(item => item.roleId)).size !== mappings.length)
+            return res.status(400).json({ error: 'Each role can only be used once in a reaction panel.' });
+        try {
+            const g = await client.guilds.fetch(config_1.config.DISCORD_GUILD_ID), channel = await g.channels.fetch(channelId);
+            if (!channel || channel.type !== discord_js_1.ChannelType.GuildText)
+                return res.status(400).json({ error: 'Choose a text channel in the configured Discord server.' });
+            const botMember = g.members.me || await g.members.fetch(client.user.id);
+            if (!botMember.permissions.has(discord_js_1.PermissionFlagsBits.ManageRoles))
+                return res.status(400).json({ error: 'The bot needs the Manage Roles permission.' });
+            const channelPermissions = channel.permissionsFor(botMember);
+            if (!channelPermissions?.has([discord_js_1.PermissionFlagsBits.ViewChannel, discord_js_1.PermissionFlagsBits.SendMessages, discord_js_1.PermissionFlagsBits.EmbedLinks, discord_js_1.PermissionFlagsBits.AddReactions, discord_js_1.PermissionFlagsBits.ReadMessageHistory]))
+                return res.status(400).json({ error: 'The bot needs View Channel, Send Messages, Embed Links, Add Reactions, and Read Message History in the selected channel.' });
+            const resolved = mappings.map(item => ({ emoji: item.emoji, emojiKey: emojiKey(item.emoji), role: g.roles.cache.get(item.roleId) }));
+            if (resolved.some(item => !item.role || item.role.id === g.id || item.role.managed || item.role.position >= botMember.roles.highest.position))
+                return res.status(400).json({ error: 'Choose roles that the bot can manage, below its highest role.' });
+            const embed = new discord_js_1.EmbedBuilder().setColor(0x5794f5).setTitle(title).setDescription(description || 'React below to get or remove a role.').addFields(resolved.map(item => ({ name: `${item.emoji}  ${item.role.name}`, value: `<@&${item.role.id}>`, inline: true })));
+            const sent = await channel.send({ embeds: [embed], allowedMentions: { parse: [] } });
+            try {
+                for (const item of resolved)
+                    await sent.react(item.emojiKey);
+            }
+            catch (error) {
+                await sent.delete().catch(() => undefined);
+                throw error;
+            }
+            const previous = (0, db_1.getSetting)('reactionRolePanel', { channelId: '', messageId: '' });
+            (0, db_1.setSetting)('reactionRolePanel', { channelId, messageId: sent.id, title, description, mappings: resolved.map(item => ({ emoji: item.emoji, emojiKey: item.emojiKey, roleId: item.role.id })) });
+            if (previous.messageId) {
+                const oldChannel = await g.channels.fetch(previous.channelId).catch(() => null);
+                if (oldChannel?.type === discord_js_1.ChannelType.GuildText) {
+                    const oldMessage = await oldChannel.messages.fetch(previous.messageId).catch(() => null);
+                    if (oldMessage)
+                        await oldMessage.delete().catch(() => undefined);
+                }
+            }
+            addAdminLog(client, req.authUser.id, 'reaction_roles_published', `${channelId}:${sent.id}`);
+            res.json({ ok: true, messageId: sent.id, channelId });
+        }
+        catch (error) {
+            console.error('Could not publish reaction role panel', error);
+            res.status(502).json({ error: 'Could not publish the reaction role message. Check the bot permissions and emoji values.' });
+        }
+    });
     app.get('/api/settings', auth, (0, auth_1.requireRole)('readonly'), (_req, res) => res.json({
         panelMessage: (0, db_1.getSetting)('panelMessage', 'Choose a category to open a private ticket.'), welcomeMessage: (0, db_1.getSetting)('welcomeMessage', 'Describe your issue for the support team.'), panelChannelId: (0, db_1.getSetting)('panelChannelId', server_defaults_1.DEFAULT_PANEL_CHANNEL_ID) || server_defaults_1.DEFAULT_PANEL_CHANNEL_ID,
         logChannelId: (0, db_1.getSetting)('logChannelId', server_defaults_1.DEFAULT_LOG_CHANNEL_ID) || server_defaults_1.DEFAULT_LOG_CHANNEL_ID, transcriptChannelId: (0, db_1.getSetting)('transcriptChannelId', server_defaults_1.DEFAULT_TRANSCRIPT_CHANNEL_ID) || server_defaults_1.DEFAULT_TRANSCRIPT_CHANNEL_ID, discordCategoryId: (0, db_1.getSetting)('discordCategoryId', ''),
