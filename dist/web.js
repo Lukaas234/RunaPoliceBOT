@@ -359,8 +359,9 @@ function createWebApp(client) {
             await g.channels.fetch();
             const botMember = g.members.me || await g.members.fetch(client.user.id);
             const channels = [...g.channels.cache.values()].filter(c => c.type === discord_js_1.ChannelType.GuildText).map(c => ({ id: c.id, name: c.name })).sort((a, b) => a.name.localeCompare(b.name));
-            const roles = [...g.roles.cache.values()].filter(r => r.id !== g.id && !r.managed && r.position < botMember.roles.highest.position).map(r => ({ id: r.id, name: r.name, position: r.position })).sort((a, b) => b.position - a.position);
-            res.json({ panel: (0, db_1.getSetting)('reactionRolePanel', { channelId: '', messageId: '', title: 'Choose your roles', description: 'React below to get or remove a role.', mappings: [] }), channels, roles, canManageRoles: botMember.permissions.has(discord_js_1.PermissionFlagsBits.ManageRoles) });
+            const canManageRoles = botMember.permissions.has(discord_js_1.PermissionFlagsBits.ManageRoles);
+            const roles = [...g.roles.cache.values()].filter(r => r.id !== g.id && !r.managed && r.tags?.botId !== client.user?.id).map(r => ({ id: r.id, name: r.name, position: r.position, assignable: canManageRoles && r.editable })).sort((a, b) => b.position - a.position);
+            res.json({ panel: (0, db_1.getSetting)('reactionRolePanel', { channelId: '', messageId: '', title: 'Choose your roles', description: 'React below to get or remove a role.', mappings: [] }), channels, roles, canManageRoles });
         }
         catch (error) {
             console.error('Could not load reaction role settings', error);

@@ -205,8 +205,9 @@ export function createWebApp(client:Client) {
       const g=await client.guilds.fetch(config.DISCORD_GUILD_ID);await g.roles.fetch();await g.channels.fetch();
       const botMember=g.members.me||await g.members.fetch(client.user!.id);
       const channels=[...g.channels.cache.values()].filter(c=>c.type===ChannelType.GuildText).map(c=>({id:c.id,name:c.name})).sort((a,b)=>a.name.localeCompare(b.name));
-      const roles=[...g.roles.cache.values()].filter(r=>r.id!==g.id&&!r.managed&&r.position<botMember.roles.highest.position).map(r=>({id:r.id,name:r.name,position:r.position})).sort((a,b)=>b.position-a.position);
-      res.json({panel:getSetting('reactionRolePanel',{channelId:'',messageId:'',title:'Choose your roles',description:'React below to get or remove a role.',mappings:[]}),channels,roles,canManageRoles:botMember.permissions.has(PermissionFlagsBits.ManageRoles)});
+      const canManageRoles=botMember.permissions.has(PermissionFlagsBits.ManageRoles);
+      const roles=[...g.roles.cache.values()].filter(r=>r.id!==g.id&&!r.managed&&r.tags?.botId!==client.user?.id).map(r=>({id:r.id,name:r.name,position:r.position,assignable:canManageRoles&&r.editable})).sort((a,b)=>b.position-a.position);
+      res.json({panel:getSetting('reactionRolePanel',{channelId:'',messageId:'',title:'Choose your roles',description:'React below to get or remove a role.',mappings:[]}),channels,roles,canManageRoles});
     } catch(error){console.error('Could not load reaction role settings',error);res.status(502).json({error:'Could not load channels and roles from Discord.'});}
   });
   app.post('/api/reaction-roles',auth,requireRole('admin'),async(req,res)=>{
