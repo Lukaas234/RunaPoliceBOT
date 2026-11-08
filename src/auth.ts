@@ -48,9 +48,9 @@ function getRole(roles:string[],administrator:boolean):AuthUser['role']|null {
 export async function requireAuth(client:Client,req:Request,res:Response,next:NextFunction) {
   try {
     const raw=req.cookies?.['__Host-rap_session'] || req.cookies?.['rap_session'];
-    if(!raw) return res.status(401).json({error:'Sign in with Discord.'});
+    if(!raw) {if(req.path==='/api/me') console.warn('[OAuth] /api/me received no session cookie');return res.status(401).json({error:'Sign in with Discord.'});}
     const row=db.prepare('SELECT * FROM sessions WHERE token_hash=? AND expires_at>?').get(sha(raw),Date.now()) as {user_id:string;username:string;avatar:string|null;csrf_token:string}|undefined;
-    if(!row) return res.status(401).json({error:'Your session has expired.'});
+    if(!row) {if(req.path==='/api/me') console.warn('[OAuth] /api/me received a session cookie that has no active database session');return res.status(401).json({error:'Your session has expired.'});}
     const guild=await client.guilds.fetch(config.DISCORD_GUILD_ID);
     const member=guild.members.cache.get(row.user_id)||await guild.members.fetch(row.user_id).catch(()=>null);
     if(!member) { db.prepare('DELETE FROM sessions WHERE token_hash=?').run(sha(raw)); return res.status(403).json({error:'You are no longer a member of Run a Police.'}); }

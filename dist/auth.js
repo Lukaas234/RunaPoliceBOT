@@ -66,11 +66,17 @@ function getRole(roles, administrator) {
 async function requireAuth(client, req, res, next) {
     try {
         const raw = req.cookies?.['__Host-rap_session'] || req.cookies?.['rap_session'];
-        if (!raw)
+        if (!raw) {
+            if (req.path === '/api/me')
+                console.warn('[OAuth] /api/me received no session cookie');
             return res.status(401).json({ error: 'Sign in with Discord.' });
+        }
         const row = db_1.db.prepare('SELECT * FROM sessions WHERE token_hash=? AND expires_at>?').get(sha(raw), Date.now());
-        if (!row)
+        if (!row) {
+            if (req.path === '/api/me')
+                console.warn('[OAuth] /api/me received a session cookie that has no active database session');
             return res.status(401).json({ error: 'Your session has expired.' });
+        }
         const guild = await client.guilds.fetch(config_1.config.DISCORD_GUILD_ID);
         const member = guild.members.cache.get(row.user_id) || await guild.members.fetch(row.user_id).catch(() => null);
         if (!member) {

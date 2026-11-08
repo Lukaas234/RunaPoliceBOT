@@ -82,14 +82,17 @@ function createWebApp(client) {
     app.get('/auth/callback', async (req, res) => {
         try {
             const code = String(req.query.code || ''), state = String(req.query.state || ''), cookie = req.cookies?.rap_oauth_state;
+            console.info(`[OAuth] callback received: code=${!!code} state=${!!state} stateCookie=${!!cookie}`);
             if (!code || !state || !cookie || !node_crypto_1.default.timingSafeEqual(Buffer.from(state), Buffer.from(cookie)))
                 throw new Error('Invalid OAuth state. Please sign in again.');
             const result = await (0, auth_1.finishOAuth)(client, code, state);
             (0, auth_1.setSessionCookie)(res, result.cookie);
             res.clearCookie('rap_oauth_state', { path: '/auth' });
+            console.info(`[OAuth] session created: user=${result.user.id} role=${result.user.role}`);
             res.redirect('/');
         }
         catch (e) {
+            console.error('[OAuth] callback failed:', e instanceof Error ? e.message : 'Unknown error');
             res.status(403).send(`<!doctype html><meta charset="utf-8"><title>Access error</title><p>${urlsafe(e instanceof Error ? e.message : 'Could not sign in.')}</p><a href="/auth/discord">Try again</a>`);
         }
     });

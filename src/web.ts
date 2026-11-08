@@ -42,10 +42,12 @@ export function createWebApp(client:Client) {
   app.get('/auth/callback',async(req,res)=>{
     try {
       const code=String(req.query.code||''),state=String(req.query.state||''),cookie=(req as any).cookies?.rap_oauth_state;
+      console.info(`[OAuth] callback received: code=${!!code} state=${!!state} stateCookie=${!!cookie}`);
       if(!code||!state||!cookie||!crypto.timingSafeEqual(Buffer.from(state),Buffer.from(cookie))) throw new Error('Invalid OAuth state. Please sign in again.');
       const result=await finishOAuth(client,code,state);setSessionCookie(res,result.cookie);res.clearCookie('rap_oauth_state',{path:'/auth'});
+      console.info(`[OAuth] session created: user=${result.user.id} role=${result.user.role}`);
       res.redirect('/');
-    } catch(e) {res.status(403).send(`<!doctype html><meta charset="utf-8"><title>Access error</title><p>${urlsafe(e instanceof Error?e.message:'Could not sign in.')}</p><a href="/auth/discord">Try again</a>`);}
+    } catch(e) {console.error('[OAuth] callback failed:',e instanceof Error?e.message:'Unknown error');res.status(403).send(`<!doctype html><meta charset="utf-8"><title>Access error</title><p>${urlsafe(e instanceof Error?e.message:'Could not sign in.')}</p><a href="/auth/discord">Try again</a>`);}
   });
   app.post('/auth/logout',async(req,res)=>{await requireAuth(client,req,res,()=>{});if(!req.authUser)return;clearSession(req,res);res.json({ok:true});});
   const auth=(req:Request,res:Response,next:any)=>requireAuth(client,req,res,next);
