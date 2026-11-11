@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.sendAudit = sendAudit;
+exports.sendCommunityAudit = sendCommunityAudit;
 exports.recordSystemError = recordSystemError;
 const db_1 = require("./db");
 const db_2 = require("./db");
@@ -15,6 +16,18 @@ async function sendAudit(client, message, locale = 'en') {
     }
     catch (error) {
         console.error('Could not send Discord audit log', error);
+    }
+}
+async function sendCommunityAudit(client, message) {
+    try {
+        const channel = await client.channels.fetch(server_defaults_1.DEFAULT_COMMUNITY_LOG_CHANNEL_ID);
+        if (channel?.isTextBased() && 'send' in channel)
+            await channel.send({ content: message.slice(0, 1900), allowedMentions: { parse: [] } });
+        else
+            console.error(`Community audit channel ${server_defaults_1.DEFAULT_COMMUNITY_LOG_CHANNEL_ID} is not a text channel.`);
+    }
+    catch (error) {
+        console.error('Could not send community audit log', error);
     }
 }
 function recordSystemError(client, error, context) {

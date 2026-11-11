@@ -5,6 +5,7 @@ import {
 import { db, getSetting } from './db';
 import { isStaff } from './tickets';
 import { DEFAULT_COMMUNITY_BOARD_CHANNEL_ID, DEFAULT_COMMUNITY_FORUM_ID, DEFAULT_PROJECT_OWNER_ID } from './server-defaults';
+import { sendCommunityAudit } from './audit';
 
 export type CommunityKind='task'|'error'|'problem'|'suggestion';
 export type CommunityPriority='low'|'normal'|'high'|'urgent';
@@ -63,12 +64,15 @@ async function publishReservedPost(client:Client,post:CommunityPost):Promise<Com
     throw error;
   }
 }
-export async function createCommunityPost(client:Client,input:{sourceThreadId?:string|null;kind:CommunityKind;title:string;body?:string;changes?:string;imageUrl?:string|null;sourceVotes?:number;createdBy:string}):Promise<CommunityPost> {
+export async function createCommunityPost(client:Client,input:{sourceThreadId?:string|null;origin?:'web'|'command';kind:CommunityKind;title:string;body?:string;changes?:string;imageUrl?:string|null;sourceVotes?:number;createdBy:string}):Promise<CommunityPost> {
   if(input.sourceThreadId&&db.prepare('SELECT id FROM community_posts WHERE source_thread_id=?').get(input.sourceThreadId))throw new Error('This forum post was already forwarded.');
   const post=reservePost(input);
-  if(post.delivery_state==='queued')return post;
-  try {return await publishReservedPost(client,post);}
-  catch(error) {console.error('Community post queued after delivery failure',error);return db.prepare('SELECT * FROM community_posts WHERE id=?').get(post.id) as CommunityPost;}
+  let result=post;
+  if(post.delivery_state!=='queued')try {result=await publishReservedPost(client,post);}
+  catch(error) {console.error('Community post queued after delivery failure',error);result=db.prepare('SELECT * FROM community_posts WHERE id=?').get(post.id) as CommunityPost;}
+  const source=input.sourceThreadId?'Forum':input.origin==='web'?'Web dashboard':'/community-create';
+  void sendCommunityAudit(client,`**Community item created** · #${result.id} · ${label(result.kind)} · ${result.title} · Priority: ${priorityNames[result.priority]||'Normal'} · ${result.delivery_state==='queued'?'Queued':'Published'} · Source: ${source} · By <@${result.created_by}>`);
+  return result;
 }
 export async function fillCommunityQueue(client:Client):Promise<number> {
   let published=0;
@@ -166,6 +170,7 @@ export async function handleCommunityButton(interaction:ButtonInteraction):Promi
   try {await interaction.message.edit({embeds:[embed],components:rows,allowedMentions:{parse:[]}});}
   catch(error){console.error('Could not update community board embed',error);}
   const promoted=action==='approve'?await fillCommunityQueue(interaction.client):0;
+  void sendCommunityAudit(interaction.client,action==='approve'?`**Community item approved · completed** · #${id} · ${updated.title} · By <@${interaction.user.id}>`:`**Community staff vote changed** · #${id} · ${updated.title} · Votes: ${votes} · By <@${interaction.user.id}>`);
   await interaction.reply({content:action==='approve'?`Marked approved and completed.${promoted?` Published ${promoted} queued item${promoted===1?'':'s'}.`:''}`:`Vote updated · ${votes} staff votes.`,ephemeral:true});
   return true;
 }

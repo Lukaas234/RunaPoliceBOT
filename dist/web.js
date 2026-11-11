@@ -367,7 +367,7 @@ function createWebApp(client) {
         if (parsed.data.imageUrl && !/^https:\/\//i.test(parsed.data.imageUrl))
             return res.status(400).json({ error: 'The image URL must use HTTPS.' });
         try {
-            const post = await (0, community_1.createCommunityPost)(client, { ...parsed.data, imageUrl: parsed.data.imageUrl || null, createdBy: req.authUser.id });
+            const post = await (0, community_1.createCommunityPost)(client, { ...parsed.data, origin: 'web', imageUrl: parsed.data.imageUrl || null, createdBy: req.authUser.id });
             addAdminLog(client, req.authUser.id, 'community_post_created', String(post.id));
             res.status(201).json({ ok: true, id: post.id, queued: post.delivery_state === 'queued' });
         }
@@ -386,6 +386,7 @@ function createWebApp(client) {
         if (!updated)
             return res.status(404).json({ error: 'Community item not found.' });
         addAdminLog(client, req.authUser.id, 'community_priority_updated', `${id}:${parsed.data.priority}`);
+        void (0, audit_1.sendCommunityAudit)(client, `**Community priority changed** · #${id} · ${updated.post.title} · ${parsed.data.priority.toUpperCase()} · By <@${req.authUser.id}>`);
         res.json({ ok: true, boardUpdated: updated.boardUpdated });
     });
     app.post('/api/community/:id/approve', auth, (0, auth_1.requireRole)('admin'), async (req, res) => {
@@ -398,6 +399,7 @@ function createWebApp(client) {
         if (!result)
             return res.status(404).json({ error: 'Community item not found.' });
         addAdminLog(client, req.authUser.id, 'community_post_approved', String(id));
+        void (0, audit_1.sendCommunityAudit)(client, `**Community item approved · completed** · #${id} · ${result.post.title} · By <@${req.authUser.id}>`);
         res.json({ ok: true, boardUpdated: result.boardUpdated, promoted: result.promoted });
     });
     app.delete('/api/community/:id', auth, (0, auth_1.requireRole)('admin'), async (req, res) => {
@@ -409,6 +411,7 @@ function createWebApp(client) {
             if (!result)
                 return res.status(404).json({ error: 'Community item not found.' });
             addAdminLog(client, req.authUser.id, 'community_post_deleted', String(id));
+            void (0, audit_1.sendCommunityAudit)(client, `**Community item deleted** · #${id} · ${result.post.title} · By <@${req.authUser.id}>`);
             res.json({ ok: true, promoted: result.promoted });
         }
         catch (error) {

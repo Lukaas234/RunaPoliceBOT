@@ -15,7 +15,7 @@ import { addTicketEvent, categoryText, getTicket, priorityLabel, recreateTicketC
 import { generateTranscript, sendTranscriptToDiscord } from './transcripts';
 import { DEFAULT_ES_LOG_CHANNEL_ID, DEFAULT_ES_PANEL_CHANNEL_ID, DEFAULT_ES_TRANSCRIPT_CHANNEL_ID, DEFAULT_LOG_CHANNEL_ID, DEFAULT_PANEL_CHANNEL_ID, DEFAULT_PROJECT_OWNER_ID, DEFAULT_TRANSCRIPT_CHANNEL_ID } from './server-defaults';
 import { refreshPanel } from './discord';
-import { recordSystemError, sendAudit } from './audit';
+import { recordSystemError, sendAudit, sendCommunityAudit } from './audit';
 import { localized, tr } from './i18n';
 import { z } from 'zod';
 import { getReactionRolePanels, saveReactionRolePanels } from './reaction-roles';
@@ -211,7 +211,7 @@ export function createWebApp(client:Client) {
     if(!parsed.success)return res.status(400).json({error:'Enter a title and valid community item details.'});
     if(parsed.data.imageUrl&&!/^https:\/\//i.test(parsed.data.imageUrl))return res.status(400).json({error:'The image URL must use HTTPS.'});
     try {
-      const post=await createCommunityPost(client,{...parsed.data,imageUrl:parsed.data.imageUrl||null,createdBy:req.authUser!.id});
+      const post=await createCommunityPost(client,{...parsed.data,origin:'web',imageUrl:parsed.data.imageUrl||null,createdBy:req.authUser!.id});
       addAdminLog(client,req.authUser!.id,'community_post_created',String(post.id));res.status(201).json({ok:true,id:post.id,queued:post.delivery_state==='queued'});
     } catch(error){console.error('Could not create community post from dashboard',error);res.status(502).json({error:'Could not save the community item.'});}
   });
@@ -220,19 +220,20 @@ export function createWebApp(client:Client) {
     if(!id)return res.status(400).json({error:'Invalid community item ID.'});if(!parsed.success)return res.status(400).json({error:'Choose a valid priority.'});
     const updated=await updateCommunityPostPriority(client,id,parsed.data.priority);if(!updated)return res.status(404).json({error:'Community item not found.'});
     addAdminLog(client,req.authUser!.id,'community_priority_updated',`${id}:${parsed.data.priority}`);
+    void sendCommunityAudit(client,`**Community priority changed** · #${id} · ${updated.post.title} · ${parsed.data.priority.toUpperCase()} · By <@${req.authUser!.id}>`);
     res.json({ok:true,boardUpdated:updated.boardUpdated});
   });
   app.post('/api/community/:id/approve',auth,requireRole('admin'),async(req,res)=>{
     if(req.authUser!.id!==DEFAULT_PROJECT_OWNER_ID)return res.status(403).json({error:'Only the project owner can approve and mark items as completed.'});
     const id=parseIntParam(req.params.id);if(!id)return res.status(400).json({error:'Invalid community item ID.'});
     const result=await approveCommunityPost(client,id,req.authUser!.id);if(!result)return res.status(404).json({error:'Community item not found.'});
-    addAdminLog(client,req.authUser!.id,'community_post_approved',String(id));res.json({ok:true,boardUpdated:result.boardUpdated,promoted:result.promoted});
+    addAdminLog(client,req.authUser!.id,'community_post_approved',String(id));void sendCommunityAudit(client,`**Community item approved · completed** · #${id} · ${result.post.title} · By <@${req.authUser!.id}>`);res.json({ok:true,boardUpdated:result.boardUpdated,promoted:result.promoted});
   });
   app.delete('/api/community/:id',auth,requireRole('admin'),async(req,res)=>{
     const id=parseIntParam(req.params.id);if(!id)return res.status(400).json({error:'Invalid community item ID.'});
     try {
       const result=await deleteCommunityPost(client,id);if(!result)return res.status(404).json({error:'Community item not found.'});
-      addAdminLog(client,req.authUser!.id,'community_post_deleted',String(id));res.json({ok:true,promoted:result.promoted});
+      addAdminLog(client,req.authUser!.id,'community_post_deleted',String(id));void sendCommunityAudit(client,`**Community item deleted** · #${id} · ${result.post.title} · By <@${req.authUser!.id}>`);res.json({ok:true,promoted:result.promoted});
     } catch(error){console.error('Could not delete community item',error);res.status(502).json({error:'Could not delete the community item from Discord. Check the bot permissions and try again.'});}
   });
   app.get('/api/reaction-roles',auth,requireRole('admin'),async(_req,res)=>{

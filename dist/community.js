@@ -17,6 +17,7 @@ const discord_js_1 = require("discord.js");
 const db_1 = require("./db");
 const tickets_1 = require("./tickets");
 const server_defaults_1 = require("./server-defaults");
+const audit_1 = require("./audit");
 exports.MAX_ACTIVE_COMMUNITY_POSTS = 8;
 exports.FORUM_REACTION_THRESHOLD = 10;
 const names = { task: 'Pending task', error: 'Bug', problem: 'Problem', suggestion: 'Suggestion' };
@@ -79,15 +80,18 @@ async function createCommunityPost(client, input) {
     if (input.sourceThreadId && db_1.db.prepare('SELECT id FROM community_posts WHERE source_thread_id=?').get(input.sourceThreadId))
         throw new Error('This forum post was already forwarded.');
     const post = reservePost(input);
-    if (post.delivery_state === 'queued')
-        return post;
-    try {
-        return await publishReservedPost(client, post);
-    }
-    catch (error) {
-        console.error('Community post queued after delivery failure', error);
-        return db_1.db.prepare('SELECT * FROM community_posts WHERE id=?').get(post.id);
-    }
+    let result = post;
+    if (post.delivery_state !== 'queued')
+        try {
+            result = await publishReservedPost(client, post);
+        }
+        catch (error) {
+            console.error('Community post queued after delivery failure', error);
+            result = db_1.db.prepare('SELECT * FROM community_posts WHERE id=?').get(post.id);
+        }
+    const source = input.sourceThreadId ? 'Forum' : input.origin === 'web' ? 'Web dashboard' : '/community-create';
+    void (0, audit_1.sendCommunityAudit)(client, `**Community item created** · #${result.id} · ${label(result.kind)} · ${result.title} · Priority: ${priorityNames[result.priority] || 'Normal'} · ${result.delivery_state === 'queued' ? 'Queued' : 'Published'} · Source: ${source} · By <@${result.created_by}>`);
+    return result;
 }
 async function fillCommunityQueue(client) {
     let published = 0;
@@ -231,6 +235,7 @@ async function handleCommunityButton(interaction) {
         console.error('Could not update community board embed', error);
     }
     const promoted = action === 'approve' ? await fillCommunityQueue(interaction.client) : 0;
+    void (0, audit_1.sendCommunityAudit)(interaction.client, action === 'approve' ? `**Community item approved · completed** · #${id} · ${updated.title} · By <@${interaction.user.id}>` : `**Community staff vote changed** · #${id} · ${updated.title} · Votes: ${votes} · By <@${interaction.user.id}>`);
     await interaction.reply({ content: action === 'approve' ? `Marked approved and completed.${promoted ? ` Published ${promoted} queued item${promoted === 1 ? '' : 's'}.` : ''}` : `Vote updated · ${votes} staff votes.`, ephemeral: true });
     return true;
 }
