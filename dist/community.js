@@ -10,6 +10,8 @@ exports.handleCommunityButton = handleCommunityButton;
 exports.listPendingCommunityPosts = listPendingCommunityPosts;
 exports.communityListEmbed = communityListEmbed;
 exports.updateCommunityPostPriority = updateCommunityPostPriority;
+exports.approveCommunityPost = approveCommunityPost;
+exports.deleteCommunityPost = deleteCommunityPost;
 exports.scanActiveForumThreads = scanActiveForumThreads;
 const discord_js_1 = require("discord.js");
 const db_1 = require("./db");
@@ -261,6 +263,49 @@ async function updateCommunityPostPriority(client, id, priority) {
         console.error(`Could not update priority on community post #${id}`, error);
         return { post, boardUpdated: false };
     }
+}
+async function refreshCommunityMessage(client, post) {
+    if (!post.target_message_id || post.delivery_state !== 'published')
+        return true;
+    try {
+        const channel = await client.channels.fetch(post.target_channel_id);
+        if (!channel?.isTextBased() || !('messages' in channel))
+            return false;
+        const message = await channel.messages.fetch(post.target_message_id);
+        await message.edit({ embeds: [postEmbed(post, votesFor(post.id))], components: components(post, votesFor(post.id)), allowedMentions: { parse: [] } });
+        return true;
+    }
+    catch (error) {
+        console.error(`Could not refresh community post #${post.id}`, error);
+        return false;
+    }
+}
+async function approveCommunityPost(client, id, actorId) {
+    const current = db_1.db.prepare('SELECT * FROM community_posts WHERE id=?').get(id);
+    if (!current)
+        return null;
+    if (current.status !== 'approved')
+        db_1.db.prepare("UPDATE community_posts SET status='approved',approved_by=?,approved_at=? WHERE id=?").run(actorId, new Date().toISOString(), id);
+    const post = db_1.db.prepare('SELECT * FROM community_posts WHERE id=?').get(id);
+    const boardUpdated = await refreshCommunityMessage(client, post), promoted = await fillCommunityQueue(client);
+    return { post, boardUpdated, promoted };
+}
+async function deleteCommunityPost(client, id) {
+    const post = db_1.db.prepare('SELECT * FROM community_posts WHERE id=?').get(id);
+    if (!post)
+        return null;
+    if (post.target_message_id && post.delivery_state === 'published') {
+        const channel = await client.channels.fetch(post.target_channel_id).catch(() => null);
+        if (channel?.isTextBased() && 'messages' in channel) {
+            const message = await channel.messages.fetch(post.target_message_id).catch(error => { if (error && typeof error === 'object' && 'code' in error && error.code === 10008)
+                return null; throw error; });
+            if (message)
+                await message.delete();
+        }
+    }
+    db_1.db.prepare('DELETE FROM community_posts WHERE id=?').run(id);
+    const promoted = post.status === 'pending' && post.delivery_state === 'published' ? await fillCommunityQueue(client) : 0;
+    return { post, promoted };
 }
 async function scanActiveForumThreads(client) {
     const forum = await client.channels.fetch(server_defaults_1.DEFAULT_COMMUNITY_FORUM_ID).catch(() => null);

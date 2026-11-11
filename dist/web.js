@@ -356,9 +356,25 @@ function createWebApp(client) {
         void (0, discord_1.refreshPanel)(client).catch(e => console.error('Could not refresh ticket panel', e));
         res.json({ ok: true });
     });
-    app.get('/api/community', auth, (0, auth_1.requireRole)('readonly'), (_req, res) => {
+    app.get('/api/community', auth, (0, auth_1.requireRole)('readonly'), (req, res) => {
         const rows = db_1.db.prepare("SELECT p.*,(SELECT COUNT(*) FROM community_votes v WHERE v.post_id=p.id) AS board_votes FROM community_posts p ORDER BY CASE p.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END,p.created_at DESC,p.id DESC").all();
-        res.json(rows);
+        res.json({ posts: rows, permissions: { canCreate: ['support', 'supervisor', 'admin'].includes(req.authUser.role), canDelete: req.authUser.role === 'admin', canApprove: req.authUser.id === server_defaults_1.DEFAULT_PROJECT_OWNER_ID } });
+    });
+    app.post('/api/community', auth, (0, auth_1.requireRole)(...mutationRoles), async (req, res) => {
+        const parsed = zod_1.z.object({ kind: zod_1.z.enum(['task', 'error', 'problem', 'suggestion']), title: zod_1.z.string().trim().min(1).max(200), body: zod_1.z.string().trim().max(3800), changes: zod_1.z.string().trim().max(1000).optional().default(''), imageUrl: zod_1.z.string().trim().max(2000).optional().default('') }).safeParse(req.body);
+        if (!parsed.success)
+            return res.status(400).json({ error: 'Enter a title and valid community item details.' });
+        if (parsed.data.imageUrl && !/^https:\/\//i.test(parsed.data.imageUrl))
+            return res.status(400).json({ error: 'The image URL must use HTTPS.' });
+        try {
+            const post = await (0, community_1.createCommunityPost)(client, { ...parsed.data, imageUrl: parsed.data.imageUrl || null, createdBy: req.authUser.id });
+            addAdminLog(client, req.authUser.id, 'community_post_created', String(post.id));
+            res.status(201).json({ ok: true, id: post.id, queued: post.delivery_state === 'queued' });
+        }
+        catch (error) {
+            console.error('Could not create community post from dashboard', error);
+            res.status(502).json({ error: 'Could not save the community item.' });
+        }
     });
     app.put('/api/community/:id/priority', auth, (0, auth_1.requireRole)(...mutationRoles), async (req, res) => {
         const id = parseIntParam(req.params.id), parsed = zod_1.z.object({ priority: zod_1.z.enum(['low', 'normal', 'high', 'urgent']) }).safeParse(req.body);
@@ -371,6 +387,34 @@ function createWebApp(client) {
             return res.status(404).json({ error: 'Community item not found.' });
         addAdminLog(client, req.authUser.id, 'community_priority_updated', `${id}:${parsed.data.priority}`);
         res.json({ ok: true, boardUpdated: updated.boardUpdated });
+    });
+    app.post('/api/community/:id/approve', auth, (0, auth_1.requireRole)('admin'), async (req, res) => {
+        if (req.authUser.id !== server_defaults_1.DEFAULT_PROJECT_OWNER_ID)
+            return res.status(403).json({ error: 'Only the project owner can approve and mark items as completed.' });
+        const id = parseIntParam(req.params.id);
+        if (!id)
+            return res.status(400).json({ error: 'Invalid community item ID.' });
+        const result = await (0, community_1.approveCommunityPost)(client, id, req.authUser.id);
+        if (!result)
+            return res.status(404).json({ error: 'Community item not found.' });
+        addAdminLog(client, req.authUser.id, 'community_post_approved', String(id));
+        res.json({ ok: true, boardUpdated: result.boardUpdated, promoted: result.promoted });
+    });
+    app.delete('/api/community/:id', auth, (0, auth_1.requireRole)('admin'), async (req, res) => {
+        const id = parseIntParam(req.params.id);
+        if (!id)
+            return res.status(400).json({ error: 'Invalid community item ID.' });
+        try {
+            const result = await (0, community_1.deleteCommunityPost)(client, id);
+            if (!result)
+                return res.status(404).json({ error: 'Community item not found.' });
+            addAdminLog(client, req.authUser.id, 'community_post_deleted', String(id));
+            res.json({ ok: true, promoted: result.promoted });
+        }
+        catch (error) {
+            console.error('Could not delete community item', error);
+            res.status(502).json({ error: 'Could not delete the community item from Discord. Check the bot permissions and try again.' });
+        }
     });
     app.get('/api/reaction-roles', auth, (0, auth_1.requireRole)('admin'), async (_req, res) => {
         try {
