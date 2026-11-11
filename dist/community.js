@@ -9,6 +9,7 @@ exports.inspectForumReaction = inspectForumReaction;
 exports.handleCommunityButton = handleCommunityButton;
 exports.listPendingCommunityPosts = listPendingCommunityPosts;
 exports.communityListEmbed = communityListEmbed;
+exports.updateCommunityPostPriority = updateCommunityPostPriority;
 exports.scanActiveForumThreads = scanActiveForumThreads;
 const discord_js_1 = require("discord.js");
 const db_1 = require("./db");
@@ -17,6 +18,7 @@ const server_defaults_1 = require("./server-defaults");
 exports.MAX_ACTIVE_COMMUNITY_POSTS = 8;
 exports.FORUM_REACTION_THRESHOLD = 10;
 const names = { task: 'Pending task', error: 'Bug', problem: 'Problem', suggestion: 'Suggestion' };
+const priorityNames = { low: 'Low', normal: 'Normal', high: 'High', urgent: 'Urgent' };
 const kindColor = { task: 0x3b82f6, error: 0xef4444, problem: 0xf59e0b, suggestion: 0x8b5cf6 };
 const clip = (value, max) => value.trim().slice(0, max);
 const safeImage = (value) => { if (!value)
@@ -35,7 +37,7 @@ function components(post, votes) {
     return [new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId(`community:vote:${post.id}`).setLabel(`👍 Vote · ${votes}`).setStyle(discord_js_1.ButtonStyle.Primary), new discord_js_1.ButtonBuilder().setCustomId(`community:approve:${post.id}`).setLabel('✅ Approved · Completed').setStyle(discord_js_1.ButtonStyle.Success).setDisabled(isApproved(post)))];
 }
 function postEmbed(post, votes = votesFor(post.id)) {
-    const approved = isApproved(post), embed = new discord_js_1.EmbedBuilder().setColor(approved ? 0x22c55e : kindColor[post.kind]).setTitle(`${names[post.kind]} · ${post.title}`.slice(0, 256)).setDescription(post.body || 'No additional description.').addFields({ name: 'Status', value: approved ? 'Approved · Completed' : 'Pending', inline: true }, { name: 'Staff votes', value: String(votes), inline: true }, { name: 'Forum reactions', value: String(post.source_votes), inline: true }).setFooter({ text: `Run a Police · Community Board #${post.id}` }).setTimestamp(new Date(post.created_at));
+    const approved = isApproved(post), embed = new discord_js_1.EmbedBuilder().setColor(approved ? 0x22c55e : kindColor[post.kind]).setTitle(`${names[post.kind]} · ${post.title}`.slice(0, 256)).setDescription(post.body || 'No additional description.').addFields({ name: 'Status', value: approved ? 'Approved · Completed' : 'Pending', inline: true }, { name: 'Priority', value: priorityNames[post.priority] || 'Normal', inline: true }, { name: 'Staff votes', value: String(votes), inline: true }, { name: 'Forum reactions', value: String(post.source_votes), inline: true }).setFooter({ text: `Run a Police · Community Board #${post.id}` }).setTimestamp(new Date(post.created_at));
     if (post.changes)
         embed.addFields({ name: 'Changes included', value: post.changes.slice(0, 1024) });
     if (post.source_thread_id)
@@ -231,13 +233,34 @@ async function handleCommunityButton(interaction) {
     return true;
 }
 function listPendingCommunityPosts(limit = 10) {
-    return db_1.db.prepare("SELECT p.*,(SELECT COUNT(*) FROM community_votes v WHERE v.post_id=p.id) board_votes FROM community_posts p WHERE p.status='pending' ORDER BY p.source_votes+(SELECT COUNT(*) FROM community_votes v2 WHERE v2.post_id=p.id) DESC,p.created_at DESC LIMIT ?").all(limit);
+    return db_1.db.prepare("SELECT p.*,(SELECT COUNT(*) FROM community_votes v WHERE v.post_id=p.id) board_votes FROM community_posts p WHERE p.status='pending' ORDER BY CASE p.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END,p.source_votes+(SELECT COUNT(*) FROM community_votes v2 WHERE v2.post_id=p.id) DESC,p.created_at DESC LIMIT ?").all(limit);
 }
 function communityListEmbed(posts) {
     const embed = new discord_js_1.EmbedBuilder().setColor(0x3b82f6).setTitle('Community backlog').setDescription(posts.length ? 'Forum reactions and staff votes for tasks, bugs, problems, and suggestions.' : 'There are no pending posts.');
     for (const p of posts)
-        embed.addFields({ name: `#${p.id} · ${label(p.kind)} · ${p.title}`.slice(0, 256), value: `${p.delivery_state === 'queued' ? 'Queued' : 'Posted'} · Forum reactions: ${p.source_votes} · Staff votes: ${p.board_votes ?? votesFor(p.id)} · <#${p.target_channel_id}>` });
+        embed.addFields({ name: `#${p.id} · ${priorityNames[p.priority] || 'Normal'} · ${label(p.kind)} · ${p.title}`.slice(0, 256), value: `${p.delivery_state === 'queued' ? 'Queued' : 'Posted'} · Forum reactions: ${p.source_votes} · Staff votes: ${p.board_votes ?? votesFor(p.id)} · <#${p.target_channel_id}>` });
     return embed;
+}
+async function updateCommunityPostPriority(client, id, priority) {
+    const current = db_1.db.prepare('SELECT * FROM community_posts WHERE id=?').get(id);
+    if (!current)
+        return null;
+    db_1.db.prepare('UPDATE community_posts SET priority=? WHERE id=?').run(priority, id);
+    const post = db_1.db.prepare('SELECT *,(SELECT COUNT(*) FROM community_votes WHERE post_id=?) board_votes FROM community_posts WHERE id=?').get(id, id);
+    if (!post.target_message_id || post.delivery_state !== 'published')
+        return { post, boardUpdated: true };
+    try {
+        const channel = await client.channels.fetch(post.target_channel_id);
+        if (!channel?.isTextBased() || !('messages' in channel))
+            return { post, boardUpdated: false };
+        const message = await channel.messages.fetch(post.target_message_id);
+        await message.edit({ embeds: [postEmbed(post, post.board_votes)], components: components(post, post.board_votes || 0), allowedMentions: { parse: [] } });
+        return { post, boardUpdated: true };
+    }
+    catch (error) {
+        console.error(`Could not update priority on community post #${id}`, error);
+        return { post, boardUpdated: false };
+    }
 }
 async function scanActiveForumThreads(client) {
     const forum = await client.channels.fetch(server_defaults_1.DEFAULT_COMMUNITY_FORUM_ID).catch(() => null);

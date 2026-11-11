@@ -11,7 +11,7 @@ import { ChannelType, Client, EmbedBuilder, PermissionFlagsBits, TextChannel } f
 import { config } from './config';
 import { db, getLocalizedSetting, getSetting, setSetting } from './db';
 import { clearSession, finishOAuth, requireAuth, requireRole, setSessionCookie, startOAuth } from './auth';
-import { addTicketEvent, categoryText, getTicket, priorityLabel, recreateTicketChannel, supportRoleIdsForCategory, Ticket, toggleClaim, updateTicket } from './tickets';
+import { addTicketEvent, categoryText, getTicket, priorityLabel, recreateTicketChannel, refreshTicketPriorityEmbed, supportRoleIdsForCategory, Ticket, TicketPriority, toggleClaim, updateTicket } from './tickets';
 import { generateTranscript, sendTranscriptToDiscord } from './transcripts';
 import { DEFAULT_ES_LOG_CHANNEL_ID, DEFAULT_ES_PANEL_CHANNEL_ID, DEFAULT_ES_TRANSCRIPT_CHANNEL_ID, DEFAULT_LOG_CHANNEL_ID, DEFAULT_PANEL_CHANNEL_ID, DEFAULT_TRANSCRIPT_CHANNEL_ID } from './server-defaults';
 import { refreshPanel } from './discord';
@@ -19,6 +19,7 @@ import { recordSystemError, sendAudit } from './audit';
 import { localized, tr } from './i18n';
 import { z } from 'zod';
 import { getReactionRolePanels, saveReactionRolePanels } from './reaction-roles';
+import { updateCommunityPostPriority } from './community';
 
 const categoriesTable=`SELECT id,name,description,emoji,discord_category_id,support_role_ids,enabled,sort_order FROM categories`;
 const mutationRoles=['support','supervisor','admin'] as const;
@@ -130,7 +131,7 @@ export function createWebApp(client:Client) {
       if(ticket.claimed_by!==actor)return res.status(409).json({error:'Only the staff member who claimed this ticket can release it.'});
       updateTicket(ticket,actor,'released');
     }
-    if(action==='priority') {if(!['low','normal','high','urgent'].includes(parsed.data.value||''))return res.status(400).json({error:'Invalid priority.'});updateTicket(ticket,actor,'priority',parsed.data.value);}
+    if(action==='priority') {if(!['low','normal','high','urgent'].includes(parsed.data.value||''))return res.status(400).json({error:'Invalid priority.'});updateTicket(ticket,actor,'priority',parsed.data.value);if(channel?.type===ChannelType.GuildText)await refreshTicketPriorityEmbed(channel as TextChannel,ticket,parsed.data.value as TicketPriority).catch(error=>recordSystemError(client,error,'Ticket priority embed update'));}
     if(action==='reopen') {
       if(ticket.status!=='closed')return res.status(409).json({error:'This ticket is not closed.'});
       if(!channel?.isTextBased()||!('permissionOverwrites' in channel)) {
@@ -200,6 +201,17 @@ export function createWebApp(client:Client) {
   app.delete('/api/categories/:id',auth,requireRole('admin'),(req,res)=>{
     const result=db.prepare('UPDATE categories SET enabled=0 WHERE id=?').run(String(req.params.id));if(!result.changes)return res.status(404).json({error:'Category not found.'});
     addAdminLog(client,req.authUser!.id,'category_disabled',String(req.params.id));void refreshPanel(client).catch(e=>console.error('Could not refresh ticket panel',e));res.json({ok:true});
+  });
+  app.get('/api/community',auth,requireRole('readonly'),(_req,res)=>{
+    const rows=db.prepare("SELECT p.*,(SELECT COUNT(*) FROM community_votes v WHERE v.post_id=p.id) AS board_votes FROM community_posts p ORDER BY CASE p.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END,p.created_at DESC,p.id DESC").all();
+    res.json(rows);
+  });
+  app.put('/api/community/:id/priority',auth,requireRole(...mutationRoles),async(req,res)=>{
+    const id=parseIntParam(req.params.id),parsed=z.object({priority:z.enum(['low','normal','high','urgent'])}).safeParse(req.body);
+    if(!id)return res.status(400).json({error:'Invalid community item ID.'});if(!parsed.success)return res.status(400).json({error:'Choose a valid priority.'});
+    const updated=await updateCommunityPostPriority(client,id,parsed.data.priority);if(!updated)return res.status(404).json({error:'Community item not found.'});
+    addAdminLog(client,req.authUser!.id,'community_priority_updated',`${id}:${parsed.data.priority}`);
+    res.json({ok:true,boardUpdated:updated.boardUpdated});
   });
   app.get('/api/reaction-roles',auth,requireRole('admin'),async(_req,res)=>{
     try {

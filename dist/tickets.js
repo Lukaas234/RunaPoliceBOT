@@ -4,6 +4,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.categoryText = exports.priorityNames = void 0;
+exports.refreshTicketPriorityEmbed = refreshTicketPriorityEmbed;
 exports.priorityLabel = priorityLabel;
 exports.getTicketByChannel = getTicketByChannel;
 exports.getTicket = getTicket;
@@ -23,6 +24,20 @@ const node_crypto_1 = __importDefault(require("node:crypto"));
 const db_1 = require("./db");
 const config_1 = require("./config");
 const i18n_1 = require("./i18n");
+async function refreshTicketPriorityEmbed(channel, ticket, priority) {
+    const messages = await channel.messages.fetch({ limit: 100 });
+    const message = messages.find(m => m.author.id === channel.client.user?.id && m.embeds.some(embed => embed.fields.some(field => field.name.toLowerCase() === 'ticket' && field.value === ticket.public_id)));
+    if (!message?.embeds[0])
+        throw new Error(`Ticket information embed not found for ${ticket.public_id}.`);
+    const source = message.embeds[0], embed = discord_js_1.EmbedBuilder.from(source), fields = source.fields.map(field => ({ name: field.name, value: field.value, inline: field.inline }));
+    const priorityIndex = fields.findIndex(field => ['priority', 'prioridad'].includes(field.name.toLowerCase()));
+    const priorityField = { name: (0, i18n_1.localized)(ticket.language, 'Prioridad', 'Priority'), value: priorityLabel(priority, ticket.language), inline: true };
+    if (priorityIndex >= 0)
+        fields[priorityIndex] = priorityField;
+    else
+        fields.push(priorityField);
+    await message.edit({ embeds: [embed.setFields(fields)] });
+}
 const now = () => new Date().toISOString();
 exports.priorityNames = { low: 'Low', normal: 'Normal', high: 'High', urgent: 'Urgent' };
 const defaultPriorityLabels = { en: { low: 'Low', normal: 'Normal', high: 'High', urgent: 'Urgent' }, es: { low: 'Baja', normal: 'Normal', high: 'Alta', urgent: 'Urgente' } };
@@ -190,7 +205,7 @@ async function recreateTicketChannel(guild, ticket) {
         ], topic: `Ticket ${ticket.public_id} · ${category.name}` });
     db_1.db.prepare('UPDATE tickets SET channel_id=? WHERE id=?').run(channel.id, ticket.id);
     const row = new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder().setCustomId('ticket:claim').setLabel((0, i18n_1.localized)(ticket.language, 'Reclamar', 'Claim')).setStyle(discord_js_1.ButtonStyle.Primary), new discord_js_1.ButtonBuilder().setCustomId('ticket:close').setLabel((0, i18n_1.localized)(ticket.language, 'Cerrar', 'Close')).setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder().setCustomId('ticket:priority').setLabel((0, i18n_1.localized)(ticket.language, 'Prioridad', 'Priority')).setStyle(discord_js_1.ButtonStyle.Secondary));
-    const embed = new discord_js_1.EmbedBuilder().setColor(0x3b82f6).setTitle(`${category.emoji} ${display.name}`).setDescription((0, db_1.getLocalizedSetting)('welcomeMessage', ticket.language, (0, i18n_1.localized)(ticket.language, 'Describe tu consulta al equipo de soporte.', 'Describe your issue for the support team.'))).addFields({ name: 'Ticket', value: ticket.public_id, inline: true }).setFooter({ text: 'Run a Police Tickets' }).setTimestamp();
+    const embed = new discord_js_1.EmbedBuilder().setColor(0x3b82f6).setTitle(`${category.emoji} ${display.name}`).setDescription((0, db_1.getLocalizedSetting)('welcomeMessage', ticket.language, (0, i18n_1.localized)(ticket.language, 'Describe tu consulta al equipo de soporte.', 'Describe your issue for the support team.'))).addFields({ name: 'Ticket', value: ticket.public_id, inline: true }, { name: (0, i18n_1.localized)(ticket.language, 'Prioridad', 'Priority'), value: priorityLabel(ticket.priority, ticket.language), inline: true }).setFooter({ text: 'Run a Police Tickets' }).setTimestamp();
     await channel.send({ embeds: [embed], components: [row] });
     return channel;
 }

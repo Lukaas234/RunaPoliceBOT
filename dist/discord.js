@@ -43,7 +43,7 @@ const commands = () => [
         .addStringOption(o => o.setName('description').setDescription('Description').setRequired(true))
         .addStringOption(o => o.setName('changes').setDescription('Changes included (optional)').setRequired(false))
         .addStringOption(o => o.setName('image').setDescription('Image https URL (optional)').setRequired(false))),
-    staffCommand(new discord_js_1.SlashCommandBuilder().setName('community-list').setDescription('Show pending items ordered by forum reactions and votes.'))
+    staffCommand(new discord_js_1.SlashCommandBuilder().setName('community-list').setDescription('Show pending items ordered by priority, then reactions and votes.'))
 ];
 async function registerCommands() {
     const rest = new discord_js_1.REST({ version: '10' }).setToken(config_1.config.DISCORD_TOKEN);
@@ -281,6 +281,8 @@ async function handleCommand(i) {
     if (name === 'ticket-priority') {
         const p = i.options.getString('priority', true);
         (0, tickets_1.updateTicket)(t, i.user.id, 'priority', p);
+        if (i.channel?.type === discord_js_1.ChannelType.GuildText)
+            await (0, tickets_1.refreshTicketPriorityEmbed)(i.channel, t, p).catch(error => (0, audit_1.recordSystemError)(exports.client, error, 'Ticket priority embed update'));
         await i.reply({ content: (0, i18n_1.localized)(t.language, `Prioridad actualizada: **${(0, tickets_1.priorityLabel)(p, t.language)}**.`, `Priority updated: **${(0, tickets_1.priorityLabel)(p, t.language)}**.`) });
         eventLog(t, i.user.id, 'priority', p);
         return;
@@ -469,6 +471,8 @@ exports.client.on(discord_js_1.Events.InteractionCreate, async (i) => {
             }
             const priority = i.values[0];
             (0, tickets_1.updateTicket)(t, i.user.id, 'priority', priority);
+            if (i.channel?.type === discord_js_1.ChannelType.GuildText)
+                await (0, tickets_1.refreshTicketPriorityEmbed)(i.channel, t, priority).catch(error => (0, audit_1.recordSystemError)(exports.client, error, 'Ticket priority embed update'));
             eventLog(t, i.user.id, 'priority', priority);
             await i.update({ content: (0, i18n_1.localized)(t.language, `Prioridad: **${(0, tickets_1.priorityLabel)(priority, t.language)}**.`, `Priority: **${(0, tickets_1.priorityLabel)(priority, t.language)}**.`), components: [] });
         }

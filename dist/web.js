@@ -58,6 +58,7 @@ const audit_1 = require("./audit");
 const i18n_1 = require("./i18n");
 const zod_1 = require("zod");
 const reaction_roles_1 = require("./reaction-roles");
+const community_1 = require("./community");
 const categoriesTable = `SELECT id,name,description,emoji,discord_category_id,support_role_ids,enabled,sort_order FROM categories`;
 const mutationRoles = ['support', 'supervisor', 'admin'];
 const adminRoles = ['admin'];
@@ -236,6 +237,8 @@ function createWebApp(client) {
             if (!['low', 'normal', 'high', 'urgent'].includes(parsed.data.value || ''))
                 return res.status(400).json({ error: 'Invalid priority.' });
             (0, tickets_1.updateTicket)(ticket, actor, 'priority', parsed.data.value);
+            if (channel?.type === discord_js_1.ChannelType.GuildText)
+                await (0, tickets_1.refreshTicketPriorityEmbed)(channel, ticket, parsed.data.value).catch(error => (0, audit_1.recordSystemError)(client, error, 'Ticket priority embed update'));
         }
         if (action === 'reopen') {
             if (ticket.status !== 'closed')
@@ -352,6 +355,22 @@ function createWebApp(client) {
         addAdminLog(client, req.authUser.id, 'category_disabled', String(req.params.id));
         void (0, discord_1.refreshPanel)(client).catch(e => console.error('Could not refresh ticket panel', e));
         res.json({ ok: true });
+    });
+    app.get('/api/community', auth, (0, auth_1.requireRole)('readonly'), (_req, res) => {
+        const rows = db_1.db.prepare("SELECT p.*,(SELECT COUNT(*) FROM community_votes v WHERE v.post_id=p.id) AS board_votes FROM community_posts p ORDER BY CASE p.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END,p.created_at DESC,p.id DESC").all();
+        res.json(rows);
+    });
+    app.put('/api/community/:id/priority', auth, (0, auth_1.requireRole)(...mutationRoles), async (req, res) => {
+        const id = parseIntParam(req.params.id), parsed = zod_1.z.object({ priority: zod_1.z.enum(['low', 'normal', 'high', 'urgent']) }).safeParse(req.body);
+        if (!id)
+            return res.status(400).json({ error: 'Invalid community item ID.' });
+        if (!parsed.success)
+            return res.status(400).json({ error: 'Choose a valid priority.' });
+        const updated = await (0, community_1.updateCommunityPostPriority)(client, id, parsed.data.priority);
+        if (!updated)
+            return res.status(404).json({ error: 'Community item not found.' });
+        addAdminLog(client, req.authUser.id, 'community_priority_updated', `${id}:${parsed.data.priority}`);
+        res.json({ ok: true, boardUpdated: updated.boardUpdated });
     });
     app.get('/api/reaction-roles', auth, (0, auth_1.requireRole)('admin'), async (_req, res) => {
         try {

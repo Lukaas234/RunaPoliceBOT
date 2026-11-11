@@ -5,7 +5,7 @@ import {
 } from 'discord.js';
 import { config } from './config';
 import { db, getLocalizedSetting, getSetting, setSetting } from './db';
-import { addTicketEvent, createTicket, getCategories, getTicket, getTicketByChannel, isStaff, isSupportRole, panelComponents, priorityLabel, priorityNames, recreateTicketChannel, supportRoleIdsForCategory, Ticket, TicketPriority, toggleClaim, updateTicket } from './tickets';
+import { addTicketEvent, createTicket, getCategories, getTicket, getTicketByChannel, isStaff, isSupportRole, panelComponents, priorityLabel, priorityNames, recreateTicketChannel, refreshTicketPriorityEmbed, supportRoleIdsForCategory, Ticket, TicketPriority, toggleClaim, updateTicket } from './tickets';
 import { generateTranscript, sendTranscriptToDiscord } from './transcripts';
 import { recordSystemError, sendAudit } from './audit';
 import { AppLanguage, localized, tr } from './i18n';
@@ -44,7 +44,7 @@ const commands=()=>[
     .addStringOption(o=>o.setName('description').setDescription('Description').setRequired(true))
     .addStringOption(o=>o.setName('changes').setDescription('Changes included (optional)').setRequired(false))
     .addStringOption(o=>o.setName('image').setDescription('Image https URL (optional)').setRequired(false))),
-  staffCommand(new SlashCommandBuilder().setName('community-list').setDescription('Show pending items ordered by forum reactions and votes.'))
+  staffCommand(new SlashCommandBuilder().setName('community-list').setDescription('Show pending items ordered by priority, then reactions and votes.'))
 ];
 
 export async function registerCommands() {
@@ -182,7 +182,7 @@ async function handleCommand(i:ChatInputCommandInteraction) {
     else {await i.reply({content:tr(`<@${i.user.id}> se encargará de este ticket.`,`<@${i.user.id}> will handle this ticket.`)});eventLog(t,i.user.id,'claimed');}
     return;
   }
-  if(name==='ticket-priority') {const p=i.options.getString('priority',true) as TicketPriority;updateTicket(t,i.user.id,'priority',p);await i.reply({content:localized(t.language,`Prioridad actualizada: **${priorityLabel(p,t.language)}**.`,`Priority updated: **${priorityLabel(p,t.language)}**.`)});eventLog(t,i.user.id,'priority',p);return;}
+  if(name==='ticket-priority') {const p=i.options.getString('priority',true) as TicketPriority;updateTicket(t,i.user.id,'priority',p);if(i.channel?.type===ChannelType.GuildText)await refreshTicketPriorityEmbed(i.channel,t,p).catch(error=>recordSystemError(client,error,'Ticket priority embed update'));await i.reply({content:localized(t.language,`Prioridad actualizada: **${priorityLabel(p,t.language)}**.`,`Priority updated: **${priorityLabel(p,t.language)}**.`)});eventLog(t,i.user.id,'priority',p);return;}
   if(name==='ticket-transcript') {await transcript(i,t);return;}
   if(name==='ticket-add'||name==='ticket-remove') {
     const user=i.options.getUser('user',true); const ch=i.channel as TextChannel;
@@ -288,7 +288,7 @@ client.on(Events.InteractionCreate,async i=>{
     if(i.isStringSelectMenu()&&i.customId==='ticket:priority-select') {
       const t=getTicketByChannel(i.channelId);if(!t) return i.reply({content:tr('Ticket no encontrado.','Ticket not found.'),ephemeral:true});
       if(!i.guild||!await isStaff(i.guild,i.user.id)) {await i.reply({content:localized(t.language,'Solo el equipo de soporte puede cambiar la prioridad.','Only support staff can change priority.'),ephemeral:true});return;}
-      const priority=i.values[0] as TicketPriority;updateTicket(t,i.user.id,'priority',priority);eventLog(t,i.user.id,'priority',priority);
+      const priority=i.values[0] as TicketPriority;updateTicket(t,i.user.id,'priority',priority);if(i.channel?.type===ChannelType.GuildText)await refreshTicketPriorityEmbed(i.channel,t,priority).catch(error=>recordSystemError(client,error,'Ticket priority embed update'));eventLog(t,i.user.id,'priority',priority);
       await i.update({content:localized(t.language,`Prioridad: **${priorityLabel(priority,t.language)}**.`,`Priority: **${priorityLabel(priority,t.language)}**.`),components:[]});
     }
   } catch(error) {

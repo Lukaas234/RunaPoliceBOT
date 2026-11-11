@@ -13,6 +13,16 @@ export type Ticket = {
   status:TicketStatus; priority:TicketPriority; claimed_by:string|null; created_at:string;
   closed_at:string|null; closed_by:string|null; close_reason:string|null;
 };
+export async function refreshTicketPriorityEmbed(channel:TextChannel,ticket:Ticket,priority:TicketPriority):Promise<void> {
+  const messages=await channel.messages.fetch({limit:100});
+  const message=messages.find(m=>m.author.id===channel.client.user?.id&&m.embeds.some(embed=>embed.fields.some(field=>field.name.toLowerCase()==='ticket'&&field.value===ticket.public_id)));
+  if(!message?.embeds[0])throw new Error(`Ticket information embed not found for ${ticket.public_id}.`);
+  const source=message.embeds[0],embed=EmbedBuilder.from(source),fields=source.fields.map(field=>({name:field.name,value:field.value,inline:field.inline}));
+  const priorityIndex=fields.findIndex(field=>['priority','prioridad'].includes(field.name.toLowerCase()));
+  const priorityField={name:localized(ticket.language,'Prioridad','Priority'),value:priorityLabel(priority,ticket.language),inline:true};
+  if(priorityIndex>=0)fields[priorityIndex]=priorityField;else fields.push(priorityField);
+  await message.edit({embeds:[embed.setFields(fields)]});
+}
 const now = () => new Date().toISOString();
 export const priorityNames: Record<TicketPriority,string> = { low:'Low', normal:'Normal', high:'High', urgent:'Urgent' };
 const defaultPriorityLabels={en:{low:'Low',normal:'Normal',high:'High',urgent:'Urgent'},es:{low:'Baja',normal:'Normal',high:'Alta',urgent:'Urgente'}};
@@ -159,7 +169,7 @@ export async function recreateTicketChannel(guild:Guild,ticket:Ticket):Promise<T
     ],topic:`Ticket ${ticket.public_id} · ${category.name}`});
   db.prepare('UPDATE tickets SET channel_id=? WHERE id=?').run(channel.id,ticket.id);
   const row=new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setCustomId('ticket:claim').setLabel(localized(ticket.language,'Reclamar','Claim')).setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId('ticket:close').setLabel(localized(ticket.language,'Cerrar','Close')).setStyle(ButtonStyle.Secondary),new ButtonBuilder().setCustomId('ticket:priority').setLabel(localized(ticket.language,'Prioridad','Priority')).setStyle(ButtonStyle.Secondary));
-  const embed=new EmbedBuilder().setColor(0x3b82f6).setTitle(`${category.emoji} ${display.name}`).setDescription(getLocalizedSetting('welcomeMessage',ticket.language,localized(ticket.language,'Describe tu consulta al equipo de soporte.','Describe your issue for the support team.'))).addFields({name:'Ticket',value:ticket.public_id,inline:true}).setFooter({text:'Run a Police Tickets'}).setTimestamp();
+  const embed=new EmbedBuilder().setColor(0x3b82f6).setTitle(`${category.emoji} ${display.name}`).setDescription(getLocalizedSetting('welcomeMessage',ticket.language,localized(ticket.language,'Describe tu consulta al equipo de soporte.','Describe your issue for the support team.'))).addFields({name:'Ticket',value:ticket.public_id,inline:true},{name:localized(ticket.language,'Prioridad','Priority'),value:priorityLabel(ticket.priority,ticket.language),inline:true}).setFooter({text:'Run a Police Tickets'}).setTimestamp();
   await channel.send({embeds:[embed],components:[row]});
   return channel;
 }

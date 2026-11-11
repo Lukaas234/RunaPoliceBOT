@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS community_posts (
   body TEXT NOT NULL DEFAULT '',
   changes TEXT NOT NULL DEFAULT '',
   image_url TEXT,
+  priority TEXT NOT NULL DEFAULT 'normal' CHECK(priority IN ('low','normal','high','urgent')),
   source_votes INTEGER NOT NULL DEFAULT 0,
   delivery_state TEXT NOT NULL DEFAULT 'queued' CHECK(delivery_state IN ('queued','publishing','published')),
   status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved')),
@@ -88,6 +89,9 @@ CREATE TABLE IF NOT EXISTS admin_events (
 const communityPostColumns=db.prepare('PRAGMA table_info(community_posts)').all() as Array<{name:string}>;
 if(!communityPostColumns.some(column=>column.name==='delivery_state')) {
   db.exec("ALTER TABLE community_posts ADD COLUMN delivery_state TEXT NOT NULL DEFAULT 'published' CHECK(delivery_state IN ('queued','publishing','published'))");
+}
+if(!communityPostColumns.some(column=>column.name==='priority')) {
+  db.exec("ALTER TABLE community_posts ADD COLUMN priority TEXT NOT NULL DEFAULT 'normal' CHECK(priority IN ('low','normal','high','urgent'))");
 }
 const ticketColumns=db.prepare('PRAGMA table_info(tickets)').all() as Array<{name:string}>;
 if(!ticketColumns.some(column=>column.name==='language')) db.exec("ALTER TABLE tickets ADD COLUMN language TEXT NOT NULL DEFAULT 'en' CHECK(language IN ('en','es'))");
