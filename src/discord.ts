@@ -9,7 +9,7 @@ import { addTicketEvent, createTicket, getCategories, getTicket, getTicketByChan
 import { generateTranscript, sendTranscriptToDiscord } from './transcripts';
 import { recordSystemError, sendAudit } from './audit';
 import { AppLanguage, localized, tr } from './i18n';
-import { DEFAULT_ES_PANEL_CHANNEL_ID, DEFAULT_PANEL_CHANNEL_ID } from './server-defaults';
+import { DEFAULT_ES_PANEL_CHANNEL_ID, DEFAULT_PANEL_CHANNEL_ID, DEFAULT_TICKET_RESPONDER_ROLE_ID } from './server-defaults';
 import { communityListEmbed, createCommunityPost, handleCommunityButton, inspectForumReaction, listPendingCommunityPosts, recoverCommunityQueue, scanActiveForumThreads, CommunityKind } from './community';
 import { getReactionRolePanels } from './reaction-roles';
 
@@ -54,6 +54,18 @@ export async function registerCommands() {
 export async function startDiscord() {
   await client.login(config.DISCORD_TOKEN);
   if(!client.isReady()) await new Promise<void>(resolve=>client.once(Events.ClientReady,()=>resolve()));
+}
+export async function ensureTicketResponderRoleAccess(bot:Client=client):Promise<void> {
+  const guild=await bot.guilds.fetch(config.DISCORD_GUILD_ID),role=await guild.roles.fetch(DEFAULT_TICKET_RESPONDER_ROLE_ID).catch(()=>null);
+  if(!role){console.error(`Configured ticket responder role ${DEFAULT_TICKET_RESPONDER_ROLE_ID} was not found in the guild.`);return;}
+  const tickets=db.prepare("SELECT channel_id FROM tickets WHERE status IN ('open','claimed')").all() as Array<{channel_id:string}>;
+  for(const ticket of tickets) {
+    const channel=await guild.channels.fetch(ticket.channel_id).catch(()=>null);
+    if(channel?.type!==ChannelType.GuildText)continue;
+    await channel.permissionOverwrites.edit(role.id,{ViewChannel:true,SendMessages:true,ReadMessageHistory:true})
+      .catch(error=>console.error(`Could not grant ticket access in ${channel.id} to role ${role.id}`,error));
+  }
+  console.log(`Ticket responder role access synchronized for ${tickets.length} active tickets.`);
 }
 export async function refreshPanel(bot:Client=client):Promise<void> {
   for(const locale of ['en','es'] as AppLanguage[]) await publishPanel(bot,locale);

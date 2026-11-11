@@ -1,6 +1,6 @@
 import { config } from './config';
 import { DATABASE_FILE, db, setSetting } from './db';
-import { client, refreshPanel, registerCommands, startDiscord } from './discord';
+import { client, ensureTicketResponderRoleAccess, refreshPanel, registerCommands, startDiscord } from './discord';
 import { createWebApp } from './web';
 import { recordSystemError } from './audit';
 
@@ -8,6 +8,7 @@ async function main() {
   console.log(`Persistent SQLite database: ${DATABASE_FILE}`);
   if(config.bootstrapAdminRoleIds.length) setSetting('bootstrapAdminRoleIds',config.bootstrapAdminRoleIds);
   await startDiscord();
+  await ensureTicketResponderRoleAccess(client);
   await registerCommands();
   void refreshPanel(client).catch(error=>recordSystemError(client,error,'Default ticket panel setup'));
   const app=createWebApp(client);

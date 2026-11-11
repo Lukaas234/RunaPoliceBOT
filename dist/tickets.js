@@ -24,6 +24,7 @@ const node_crypto_1 = __importDefault(require("node:crypto"));
 const db_1 = require("./db");
 const config_1 = require("./config");
 const i18n_1 = require("./i18n");
+const server_defaults_1 = require("./server-defaults");
 async function refreshTicketPriorityEmbed(channel, ticket, priority) {
     const messages = await channel.messages.fetch({ limit: 100 });
     const message = messages.find(m => m.author.id === channel.client.user?.id && m.embeds.some(embed => embed.fields.some(field => field.name.toLowerCase() === 'ticket' && field.value === ticket.public_id)));
@@ -66,7 +67,7 @@ function getTicket(publicId) {
     return db_1.db.prepare('SELECT * FROM tickets WHERE public_id=?').get(publicId.toUpperCase());
 }
 function isSupportRole(roleIds) {
-    const allowed = new Set(config_1.config.bootstrapAdminRoleIds);
+    const allowed = new Set([...config_1.config.bootstrapAdminRoleIds, server_defaults_1.DEFAULT_TICKET_RESPONDER_ROLE_ID]);
     for (const r of (0, db_1.getSetting)('supportRoleIds', []))
         allowed.add(r);
     for (const r of (0, db_1.getSetting)('adminRoleIds', []))
@@ -187,7 +188,7 @@ function getCategories() {
 function supportRoleIdsForCategory(categoryId) {
     const row = db_1.db.prepare('SELECT support_role_ids FROM categories WHERE id=?').get(categoryId);
     const specific = row ? JSON.parse(row.support_role_ids) : [];
-    return [...new Set([...specific, ...(0, db_1.getSetting)('supportRoleIds', []), ...(0, db_1.getSetting)('supervisorRoleIds', []), ...(0, db_1.getSetting)('adminRoleIds', []), ...config_1.config.bootstrapAdminRoleIds])];
+    return [...new Set([...specific, server_defaults_1.DEFAULT_TICKET_RESPONDER_ROLE_ID, ...(0, db_1.getSetting)('supportRoleIds', []), ...(0, db_1.getSetting)('supervisorRoleIds', []), ...(0, db_1.getSetting)('adminRoleIds', []), ...config_1.config.bootstrapAdminRoleIds])];
 }
 async function recreateTicketChannel(guild, ticket) {
     const category = db_1.db.prepare('SELECT * FROM categories WHERE id=?').get(ticket.category_id);

@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.client = void 0;
 exports.registerCommands = registerCommands;
 exports.startDiscord = startDiscord;
+exports.ensureTicketResponderRoleAccess = ensureTicketResponderRoleAccess;
 exports.refreshPanel = refreshPanel;
 const discord_js_1 = require("discord.js");
 const config_1 = require("./config");
@@ -53,6 +54,22 @@ async function startDiscord() {
     await exports.client.login(config_1.config.DISCORD_TOKEN);
     if (!exports.client.isReady())
         await new Promise(resolve => exports.client.once(discord_js_1.Events.ClientReady, () => resolve()));
+}
+async function ensureTicketResponderRoleAccess(bot = exports.client) {
+    const guild = await bot.guilds.fetch(config_1.config.DISCORD_GUILD_ID), role = await guild.roles.fetch(server_defaults_1.DEFAULT_TICKET_RESPONDER_ROLE_ID).catch(() => null);
+    if (!role) {
+        console.error(`Configured ticket responder role ${server_defaults_1.DEFAULT_TICKET_RESPONDER_ROLE_ID} was not found in the guild.`);
+        return;
+    }
+    const tickets = db_1.db.prepare("SELECT channel_id FROM tickets WHERE status IN ('open','claimed')").all();
+    for (const ticket of tickets) {
+        const channel = await guild.channels.fetch(ticket.channel_id).catch(() => null);
+        if (channel?.type !== discord_js_1.ChannelType.GuildText)
+            continue;
+        await channel.permissionOverwrites.edit(role.id, { ViewChannel: true, SendMessages: true, ReadMessageHistory: true })
+            .catch(error => console.error(`Could not grant ticket access in ${channel.id} to role ${role.id}`, error));
+    }
+    console.log(`Ticket responder role access synchronized for ${tickets.length} active tickets.`);
 }
 async function refreshPanel(bot = exports.client) {
     for (const locale of ['en', 'es'])

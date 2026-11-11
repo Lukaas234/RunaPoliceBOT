@@ -10,6 +10,7 @@ async function main() {
     if (config_1.config.bootstrapAdminRoleIds.length)
         (0, db_1.setSetting)('bootstrapAdminRoleIds', config_1.config.bootstrapAdminRoleIds);
     await (0, discord_1.startDiscord)();
+    await (0, discord_1.ensureTicketResponderRoleAccess)(discord_1.client);
     await (0, discord_1.registerCommands)();
     void (0, discord_1.refreshPanel)(discord_1.client).catch(error => (0, audit_1.recordSystemError)(discord_1.client, error, 'Default ticket panel setup'));
     const app = (0, web_1.createWebApp)(discord_1.client);

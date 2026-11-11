@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import { db, getLocalizedSetting, getSetting } from './db';
 import { config } from './config';
 import { AppLanguage, localized, tr } from './i18n';
+import { DEFAULT_TICKET_RESPONDER_ROLE_ID } from './server-defaults';
 
 export type TicketStatus = 'open' | 'claimed' | 'closed';
 export type TicketPriority = 'low' | 'normal' | 'high' | 'urgent';
@@ -49,7 +50,7 @@ export function getTicket(publicId:string): Ticket|undefined {
   return db.prepare('SELECT * FROM tickets WHERE public_id=?').get(publicId.toUpperCase()) as Ticket|undefined;
 }
 export function isSupportRole(roleIds:string[]): boolean {
-  const allowed = new Set<string>(config.bootstrapAdminRoleIds);
+  const allowed = new Set<string>([...config.bootstrapAdminRoleIds,DEFAULT_TICKET_RESPONDER_ROLE_ID]);
   for (const r of getSetting<string[]>('supportRoleIds', [])) allowed.add(r);
   for (const r of getSetting<string[]>('adminRoleIds', [])) allowed.add(r);
   for (const r of getSetting<string[]>('supervisorRoleIds', [])) allowed.add(r);
@@ -152,7 +153,7 @@ export function getCategories() {
 export function supportRoleIdsForCategory(categoryId:string):string[] {
   const row=db.prepare('SELECT support_role_ids FROM categories WHERE id=?').get(categoryId) as {support_role_ids:string}|undefined;
   const specific=row?JSON.parse(row.support_role_ids) as string[]:[];
-  return [...new Set([...specific,...getSetting<string[]>('supportRoleIds',[]),...getSetting<string[]>('supervisorRoleIds',[]),...getSetting<string[]>('adminRoleIds',[]),...config.bootstrapAdminRoleIds])];
+  return [...new Set([...specific,DEFAULT_TICKET_RESPONDER_ROLE_ID,...getSetting<string[]>('supportRoleIds',[]),...getSetting<string[]>('supervisorRoleIds',[]),...getSetting<string[]>('adminRoleIds',[]),...config.bootstrapAdminRoleIds])];
 }
 export async function recreateTicketChannel(guild:Guild,ticket:Ticket):Promise<TextChannel> {
   const category=db.prepare('SELECT * FROM categories WHERE id=?').get(ticket.category_id) as {name:string;emoji:string;discord_category_id:string|null}|undefined;
