@@ -14,6 +14,12 @@ export type Ticket = {
   status:TicketStatus; priority:TicketPriority; claimed_by:string|null; created_at:string;
   closed_at:string|null; closed_by:string|null; close_reason:string|null;
 };
+export class TicketLimitError extends Error {
+  constructor(limit:number,locale:AppLanguage) {
+    super(localized(locale,`Solo puedes tener ${limit} ticket${limit===1?'':'s'} abierto${limit===1?'':'s'} a la vez. Cierra uno antes de abrir otro.`,`You can only have ${limit} open ticket${limit===1?'':'s'} at a time. Close one before opening another.`));
+    this.name='TicketLimitError';
+  }
+}
 export async function refreshTicketPriorityEmbed(channel:TextChannel,ticket:Ticket,priority:TicketPriority):Promise<void> {
   const messages=await channel.messages.fetch({limit:100});
   const message=messages.find(m=>m.author.id===channel.client.user?.id&&m.embeds.some(embed=>embed.fields.some(field=>field.name.toLowerCase()==='ticket'&&field.value===ticket.public_id)));
@@ -74,7 +80,7 @@ export async function createTicket(guild:Guild, userId:string, categoryId:string
     const active = db.prepare("SELECT public_id FROM tickets WHERE owner_id=? AND status!='closed'").get(userId) as {public_id:string}|undefined;
     const limit = getSetting<number>('ticketLimitPerUser', 1);
     const count = (db.prepare("SELECT COUNT(*) n FROM tickets WHERE owner_id=? AND status!='closed'").get(userId) as {n:number}).n;
-    if (count >= limit) throw new Error(localized(locale,`Ya alcanzaste el límite de ${limit} ticket(s) abiertos${active ? ` (${active.public_id})` : ''}.`,`You have reached the limit of ${limit} open ticket(s)${active ? ` (${active.public_id})` : ''}.`));
+    if (count >= limit) throw new TicketLimitError(limit,locale);
     const category = db.prepare('SELECT * FROM categories WHERE id=? AND enabled=1').get(categoryId) as {id:string;name:string;emoji:string;discord_category_id:string|null;support_role_ids:string}|undefined;
     if (!category) throw new Error(localized(locale,'La categoría no está disponible.','This category is unavailable.'));
     const display=categoryText(category.id,category.name,'',locale);

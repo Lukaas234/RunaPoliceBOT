@@ -404,6 +404,13 @@ exports.client.on(discord_js_1.Events.InteractionCreate, async (i) => {
                 await i.editReply((0, i18n_1.localized)(locale, `Ticket **${ticket.public_id}** creado: <#${ticket.channel_id}>`, `Ticket **${ticket.public_id}** created: <#${ticket.channel_id}>`));
                 eventLog(ticket, i.user.id, 'opened', ticket.category_id);
             }
+            catch (error) {
+                if (error instanceof tickets_1.TicketLimitError) {
+                    await i.editReply(error.message);
+                    return;
+                }
+                throw error;
+            }
             finally {
                 await i.message.edit({ components: (0, tickets_1.panelComponents)(locale), allowedMentions: { parse: [] } }).catch(error => console.error('Could not reset ticket category menu', error));
             }

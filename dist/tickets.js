@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.categoryText = exports.priorityNames = void 0;
+exports.categoryText = exports.priorityNames = exports.TicketLimitError = void 0;
 exports.refreshTicketPriorityEmbed = refreshTicketPriorityEmbed;
 exports.priorityLabel = priorityLabel;
 exports.getTicketByChannel = getTicketByChannel;
@@ -25,6 +25,13 @@ const db_1 = require("./db");
 const config_1 = require("./config");
 const i18n_1 = require("./i18n");
 const server_defaults_1 = require("./server-defaults");
+class TicketLimitError extends Error {
+    constructor(limit, locale) {
+        super((0, i18n_1.localized)(locale, `Solo puedes tener ${limit} ticket${limit === 1 ? '' : 's'} abierto${limit === 1 ? '' : 's'} a la vez. Cierra uno antes de abrir otro.`, `You can only have ${limit} open ticket${limit === 1 ? '' : 's'} at a time. Close one before opening another.`));
+        this.name = 'TicketLimitError';
+    }
+}
+exports.TicketLimitError = TicketLimitError;
 async function refreshTicketPriorityEmbed(channel, ticket, priority) {
     const messages = await channel.messages.fetch({ limit: 100 });
     const message = messages.find(m => m.author.id === channel.client.user?.id && m.embeds.some(embed => embed.fields.some(field => field.name.toLowerCase() === 'ticket' && field.value === ticket.public_id)));
@@ -95,7 +102,7 @@ async function createTicket(guild, userId, categoryId, locale = 'en') {
         const limit = (0, db_1.getSetting)('ticketLimitPerUser', 1);
         const count = db_1.db.prepare("SELECT COUNT(*) n FROM tickets WHERE owner_id=? AND status!='closed'").get(userId).n;
         if (count >= limit)
-            throw new Error((0, i18n_1.localized)(locale, `Ya alcanzaste el límite de ${limit} ticket(s) abiertos${active ? ` (${active.public_id})` : ''}.`, `You have reached the limit of ${limit} open ticket(s)${active ? ` (${active.public_id})` : ''}.`));
+            throw new TicketLimitError(limit, locale);
         const category = db_1.db.prepare('SELECT * FROM categories WHERE id=? AND enabled=1').get(categoryId);
         if (!category)
             throw new Error((0, i18n_1.localized)(locale, 'La categoría no está disponible.', 'This category is unavailable.'));

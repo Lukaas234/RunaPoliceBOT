@@ -5,7 +5,7 @@ import {
 } from 'discord.js';
 import { config } from './config';
 import { db, getLocalizedSetting, getSetting, setSetting } from './db';
-import { addTicketEvent, createTicket, getCategories, getTicket, getTicketByChannel, isStaff, isSupportRole, panelComponents, priorityLabel, priorityNames, recreateTicketChannel, refreshTicketPriorityEmbed, supportRoleIdsForCategory, Ticket, TicketPriority, toggleClaim, updateTicket } from './tickets';
+import { addTicketEvent, createTicket, getCategories, getTicket, getTicketByChannel, isStaff, isSupportRole, panelComponents, priorityLabel, priorityNames, recreateTicketChannel, refreshTicketPriorityEmbed, supportRoleIdsForCategory, Ticket, TicketLimitError, TicketPriority, toggleClaim, updateTicket } from './tickets';
 import { generateTranscript, sendTranscriptToDiscord } from './transcripts';
 import { recordSystemError, sendAudit } from './audit';
 import { AppLanguage, localized, tr } from './i18n';
@@ -255,6 +255,9 @@ client.on(Events.InteractionCreate,async i=>{
         const ticket=await createTicket(i.guild,i.user.id,i.values[0],locale);
         await i.editReply(localized(locale,`Ticket **${ticket.public_id}** creado: <#${ticket.channel_id}>`,`Ticket **${ticket.public_id}** created: <#${ticket.channel_id}>`));
         eventLog(ticket,i.user.id,'opened',ticket.category_id);
+      } catch(error) {
+        if(error instanceof TicketLimitError){await i.editReply(error.message);return;}
+        throw error;
       } finally {
         await i.message.edit({components:panelComponents(locale),allowedMentions:{parse:[]}}).catch(error=>console.error('Could not reset ticket category menu',error));
       }
