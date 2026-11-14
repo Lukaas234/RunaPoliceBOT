@@ -101,7 +101,8 @@ const initialCategories = [
   ['report', 'Report a user', 'Confidential user reports.', '🚩'],
   ['appeal', 'Appeal', 'Request a review of a moderation action.', '⚖️'],
   ['technical', 'Technical issues', 'Errors, failures, or technical problems.', '🛠️'],
-  ['admin', 'Administrative questions', 'Questions for the administrative team.', '📋']
+  ['admin', 'Administrative questions', 'Questions for the administrative team.', '📋'],
+  ['creator', 'Content creator application', 'Apply to become a content creator.', '🎥']
 ];
 const addCategory = db.prepare('INSERT OR IGNORE INTO categories (id,name,description,emoji,sort_order) VALUES (?,?,?,?,?)');
 db.transaction(() => initialCategories.forEach(([id, name, description, emoji], i) => addCategory.run(id, name, description, emoji, i)))();
@@ -112,7 +113,8 @@ db.transaction(() => [
   ['Report a user','Confidential user reports.','report','Reportar a un usuario'],
   ['Appeal','Request a review of a moderation action.','appeal','Apelaciones'],
   ['Technical issues','Errors, failures, or technical problems.','technical','Problemas técnicos'],
-  ['Administrative questions','Questions for the administrative team.','admin','Consultas administrativas']
+  ['Administrative questions','Questions for the administrative team.','admin','Consultas administrativas'],
+  ['Content creator application','Apply to become a content creator.','creator','Creador de contenido']
 ].forEach(([name,description,id,oldName])=>translateSeed.run(name,description,id,oldName)))();
 const translateDefaultSetting = db.prepare('UPDATE settings SET value=?,updated_at=? WHERE key=? AND value=?');
 db.transaction(() => [

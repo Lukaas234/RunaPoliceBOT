@@ -38,7 +38,8 @@ export const categoryText=(id:string,name:string,description:string,locale:AppLa
     report:{name:'Reportar a un usuario',description:'Reportes confidenciales sobre usuarios.'},
     appeal:{name:'Apelaciones',description:'Solicita la revisión de una sanción.'},
     technical:{name:'Problemas técnicos',description:'Errores, fallos o problemas técnicos.'},
-    admin:{name:'Consultas administrativas',description:'Consultas para el equipo administrativo.'}
+    admin:{name:'Consultas administrativas',description:'Consultas para el equipo administrativo.'},
+    creator:{name:'Creador de contenido',description:'Aplica para ser creador de contenido.'}
   };
   return es[id]||{name,description};
 };
