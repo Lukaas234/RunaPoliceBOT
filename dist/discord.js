@@ -44,8 +44,84 @@ const commands = () => [
         .addStringOption(o => o.setName('description').setDescription('Description').setRequired(true))
         .addStringOption(o => o.setName('changes').setDescription('Changes included (optional)').setRequired(false))
         .addStringOption(o => o.setName('image').setDescription('Image https URL (optional)').setRequired(false))),
-    staffCommand(new discord_js_1.SlashCommandBuilder().setName('community-list').setDescription('Show pending items ordered by priority, then reactions and votes.'))
+    staffCommand(new discord_js_1.SlashCommandBuilder().setName('community-list').setDescription('Show pending items ordered by priority, then reactions and votes.')),
+    new discord_js_1.SlashCommandBuilder().setName('mention-protect').setDescription('Manage roles and users protected from unauthorized mentions.')
+        .addSubcommand(s => s.setName('role-add').setDescription('Protect a role from unauthorized mentions.')
+        .addRoleOption(o => o.setName('role').setDescription('Role to protect').setRequired(true)))
+        .addSubcommand(s => s.setName('role-remove').setDescription('Remove a role from mention protection.')
+        .addRoleOption(o => o.setName('role').setDescription('Role to unprotect').setRequired(true)))
+        .addSubcommand(s => s.setName('user-add').setDescription('Protect a user from unauthorized mentions.')
+        .addUserOption(o => o.setName('user').setDescription('User to protect').setRequired(true)))
+        .addSubcommand(s => s.setName('user-remove').setDescription('Remove a user from mention protection.')
+        .addUserOption(o => o.setName('user').setDescription('User to unprotect').setRequired(true)))
+        .addSubcommand(s => s.setName('list').setDescription('List protected roles and users.'))
 ];
+const mentionProtectionKey = 'mentionProtection';
+const getMentionProtection = () => (0, db_1.getSetting)(mentionProtectionKey, { roles: [], users: [] });
+async function handleMentionProtection(i) {
+    if (!i.guild) {
+        await i.reply({ content: 'This command can only be used in a server.', ephemeral: true });
+        return;
+    }
+    const member = await i.guild.members.fetch(i.user.id).catch(() => null);
+    if (!member || !server_defaults_1.MENTION_PROTECTION_MANAGER_ROLE_IDS.some(id => member.roles.cache.has(id))) {
+        await i.reply({ content: 'You are not allowed to manage mention protection.', ephemeral: true });
+        return;
+    }
+    const data = getMentionProtection(), action = i.options.getSubcommand();
+    if (action === 'role-add') {
+        const role = i.options.getRole('role', true), existing = data.roles.find(entry => entry.id === role.id);
+        if (existing) {
+            await i.reply({ content: `${role} is already protected.`, ephemeral: true, allowedMentions: { parse: [] } });
+            return;
+        }
+        const wasMentionable = role.mentionable;
+        try {
+            await role.setMentionable(false, 'Protected by mention-protect command');
+        }
+        catch (error) {
+            console.error('Could not disable role mentionability', error);
+            await i.reply({ content: 'Could not protect that role. The bot needs Manage Roles, and its highest role must be above the selected role.', ephemeral: true });
+            return;
+        }
+        data.roles.push({ id: role.id, wasMentionable });
+        (0, db_1.setSetting)(mentionProtectionKey, data);
+        await i.reply({ content: `${role} is now protected. Unauthorized mentions will be removed.`, ephemeral: true, allowedMentions: { parse: [] } });
+        return;
+    }
+    if (action === 'role-remove') {
+        const role = i.options.getRole('role', true), index = data.roles.findIndex(entry => entry.id === role.id);
+        if (index < 0) {
+            await i.reply({ content: 'That role is not protected.', ephemeral: true });
+            return;
+        }
+        try {
+            await role.setMentionable(data.roles[index].wasMentionable, 'Removed from mention protection');
+        }
+        catch (error) {
+            console.error('Could not restore role mentionability', error);
+            await i.reply({ content: 'Could not update that role. Check the bot Manage Roles permission and role hierarchy.', ephemeral: true });
+            return;
+        }
+        data.roles.splice(index, 1);
+        (0, db_1.setSetting)(mentionProtectionKey, data);
+        await i.reply({ content: `${role} was removed from mention protection.`, ephemeral: true, allowedMentions: { parse: [] } });
+        return;
+    }
+    if (action === 'user-add' || action === 'user-remove') {
+        const user = i.options.getUser('user', true), exists = data.users.includes(user.id);
+        if (action === 'user-add' && !exists)
+            data.users.push(user.id);
+        if (action === 'user-remove' && exists)
+            data.users = data.users.filter(id => id !== user.id);
+        (0, db_1.setSetting)(mentionProtectionKey, data);
+        await i.reply({ content: action === 'user-add' ? (exists ? `<@${user.id}> is already protected.` : `<@${user.id}> is now protected. Unauthorized mentions will be removed.`) : (exists ? `<@${user.id}> was removed from mention protection.` : 'That user is not protected.'), ephemeral: true, allowedMentions: { parse: [] } });
+        return;
+    }
+    const roles = data.roles.length ? data.roles.map(entry => `• <@&${entry.id}>`).join('\n') : 'None';
+    const users = data.users.length ? data.users.map(id => `• <@${id}>`).join('\n') : 'None';
+    await i.reply({ content: `**Protected roles**\n${roles}\n\n**Protected users**\n${users}`, ephemeral: true, allowedMentions: { parse: [] } });
+}
 async function registerCommands() {
     const rest = new discord_js_1.REST({ version: '10' }).setToken(config_1.config.DISCORD_TOKEN);
     await rest.put(discord_js_1.Routes.applicationGuildCommands(config_1.config.DISCORD_CLIENT_ID, config_1.config.DISCORD_GUILD_ID), { body: commands().map(c => c.toJSON()) });
@@ -173,6 +249,10 @@ async function closeTicket(i, t, reason) {
 }
 async function handleCommand(i) {
     const name = i.commandName;
+    if (name === 'mention-protect') {
+        await handleMentionProtection(i);
+        return;
+    }
     if (name === 'ticket') {
         await i.reply({ content: (0, i18n_1.tr)('Para contactar al equipo, usa el panel de tickets publicado en el servidor.', 'To contact support, use the ticket panel posted in the server.'), ephemeral: true });
         return;
@@ -581,7 +661,17 @@ exports.client.on(discord_js_1.Events.MessageReactionAdd, async (reaction, user)
     }
 });
 exports.client.on(discord_js_1.Events.MessageReactionRemove, (reaction, user) => handleReactionRole(reaction, user, 'remove'));
-exports.client.once(discord_js_1.Events.ClientReady, () => { void (0, community_1.recoverCommunityQueue)(exports.client).then(() => (0, community_1.scanActiveForumThreads)(exports.client)).catch(error => (0, audit_1.recordSystemError)(exports.client, error, 'Community queue startup')); });
+exports.client.once(discord_js_1.Events.ClientReady, () => {
+    void (0, community_1.recoverCommunityQueue)(exports.client).then(() => (0, community_1.scanActiveForumThreads)(exports.client)).catch(error => (0, audit_1.recordSystemError)(exports.client, error, 'Community queue startup'));
+    void (async () => {
+        const guild = await exports.client.guilds.fetch(config_1.config.DISCORD_GUILD_ID), data = getMentionProtection();
+        for (const entry of data.roles) {
+            const role = await guild.roles.fetch(entry.id).catch(() => null);
+            if (role?.mentionable)
+                await role.setMentionable(false, 'Restore mention protection after restart').catch(error => console.error(`Could not restore mention protection for role ${entry.id}`, error));
+        }
+    })().catch(error => (0, audit_1.recordSystemError)(exports.client, error, 'Mention protection startup'));
+});
 exports.client.once(discord_js_1.Events.ClientReady, c => console.log(`Discord ready as ${c.user.tag}`));
 exports.client.on(discord_js_1.Events.Error, e => (0, audit_1.recordSystemError)(exports.client, e, 'Discord client error'));
 exports.client.on(discord_js_1.Events.MessageCreate, message => {
@@ -599,4 +689,24 @@ exports.client.on(discord_js_1.Events.MessageCreate, message => {
     const participated = db_1.db.prepare("SELECT 1 FROM ticket_events WHERE ticket_id=? AND type='staff_participated' AND actor_id=? LIMIT 1").get(ticket.id, message.author.id);
     if (!participated)
         (0, tickets_1.addTicketEvent)(ticket, message.author.id, 'staff_participated');
+});
+exports.client.on(discord_js_1.Events.MessageCreate, async (message) => {
+    if (!message.guild || message.author.bot || !message.member)
+        return;
+    const data = getMentionProtection();
+    if (!data.roles.length && !data.users.length)
+        return;
+    if (server_defaults_1.MENTION_PROTECTION_MANAGER_ROLE_IDS.some(id => message.member.roles.cache.has(id)))
+        return;
+    const protectedRoleMention = message.mentions.roles.some(role => data.roles.some(entry => entry.id === role.id));
+    const protectedUserMention = message.mentions.users.some(user => data.users.includes(user.id));
+    if (!protectedRoleMention && !protectedUserMention)
+        return;
+    try {
+        await message.delete();
+        await message.channel.send({ content: `${message.author}, your message was removed because it mentioned a protected role or user without authorization.`, allowedMentions: { users: [message.author.id] } });
+    }
+    catch (error) {
+        console.error('Could not remove unauthorized protected mention; check Manage Messages in this channel.', error);
+    }
 });

@@ -9,7 +9,7 @@ import { addTicketEvent, createTicket, getCategories, getTicket, getTicketByChan
 import { generateTranscript, sendTranscriptToDiscord } from './transcripts';
 import { recordSystemError, sendAudit } from './audit';
 import { AppLanguage, localized, tr } from './i18n';
-import { DEFAULT_ES_PANEL_CHANNEL_ID, DEFAULT_PANEL_CHANNEL_ID, DEFAULT_TICKET_RESPONDER_ROLE_ID } from './server-defaults';
+import { DEFAULT_ES_PANEL_CHANNEL_ID, DEFAULT_PANEL_CHANNEL_ID, DEFAULT_TICKET_RESPONDER_ROLE_ID, MENTION_PROTECTION_MANAGER_ROLE_IDS } from './server-defaults';
 import { communityListEmbed, createCommunityPost, handleCommunityButton, inspectForumReaction, listPendingCommunityPosts, recoverCommunityQueue, scanActiveForumThreads, CommunityKind } from './community';
 import { getReactionRolePanels } from './reaction-roles';
 
@@ -44,8 +44,58 @@ const commands=()=>[
     .addStringOption(o=>o.setName('description').setDescription('Description').setRequired(true))
     .addStringOption(o=>o.setName('changes').setDescription('Changes included (optional)').setRequired(false))
     .addStringOption(o=>o.setName('image').setDescription('Image https URL (optional)').setRequired(false))),
-  staffCommand(new SlashCommandBuilder().setName('community-list').setDescription('Show pending items ordered by priority, then reactions and votes.'))
+  staffCommand(new SlashCommandBuilder().setName('community-list').setDescription('Show pending items ordered by priority, then reactions and votes.')),
+  new SlashCommandBuilder().setName('mention-protect').setDescription('Manage roles and users protected from unauthorized mentions.')
+    .addSubcommand(s=>s.setName('role-add').setDescription('Protect a role from unauthorized mentions.')
+      .addRoleOption(o=>o.setName('role').setDescription('Role to protect').setRequired(true)))
+    .addSubcommand(s=>s.setName('role-remove').setDescription('Remove a role from mention protection.')
+      .addRoleOption(o=>o.setName('role').setDescription('Role to unprotect').setRequired(true)))
+    .addSubcommand(s=>s.setName('user-add').setDescription('Protect a user from unauthorized mentions.')
+      .addUserOption(o=>o.setName('user').setDescription('User to protect').setRequired(true)))
+    .addSubcommand(s=>s.setName('user-remove').setDescription('Remove a user from mention protection.')
+      .addUserOption(o=>o.setName('user').setDescription('User to unprotect').setRequired(true)))
+    .addSubcommand(s=>s.setName('list').setDescription('List protected roles and users.'))
 ];
+
+type MentionProtection={roles:Array<{id:string;wasMentionable:boolean}>;users:string[]};
+const mentionProtectionKey='mentionProtection';
+const getMentionProtection=():MentionProtection=>getSetting<MentionProtection>(mentionProtectionKey,{roles:[],users:[]});
+
+async function handleMentionProtection(i:ChatInputCommandInteraction):Promise<void> {
+  if(!i.guild){await i.reply({content:'This command can only be used in a server.',ephemeral:true});return;}
+  const member=await i.guild.members.fetch(i.user.id).catch(()=>null);
+  if(!member||!MENTION_PROTECTION_MANAGER_ROLE_IDS.some(id=>member.roles.cache.has(id))){
+    await i.reply({content:'You are not allowed to manage mention protection.',ephemeral:true});return;
+  }
+  const data=getMentionProtection(),action=i.options.getSubcommand();
+  if(action==='role-add') {
+    const role=i.options.getRole('role',true),existing=data.roles.find(entry=>entry.id===role.id);
+    if(existing){await i.reply({content:`${role} is already protected.`,ephemeral:true,allowedMentions:{parse:[]}});return;}
+    const wasMentionable=role.mentionable;
+    try {await role.setMentionable(false,'Protected by mention-protect command');}
+    catch(error){console.error('Could not disable role mentionability',error);await i.reply({content:'Could not protect that role. The bot needs Manage Roles, and its highest role must be above the selected role.',ephemeral:true});return;}
+    data.roles.push({id:role.id,wasMentionable});setSetting(mentionProtectionKey,data);
+    await i.reply({content:`${role} is now protected. Unauthorized mentions will be removed.`,ephemeral:true,allowedMentions:{parse:[]}});return;
+  }
+  if(action==='role-remove') {
+    const role=i.options.getRole('role',true),index=data.roles.findIndex(entry=>entry.id===role.id);
+    if(index<0){await i.reply({content:'That role is not protected.',ephemeral:true});return;}
+    try {await role.setMentionable(data.roles[index].wasMentionable,'Removed from mention protection');}
+    catch(error){console.error('Could not restore role mentionability',error);await i.reply({content:'Could not update that role. Check the bot Manage Roles permission and role hierarchy.',ephemeral:true});return;}
+    data.roles.splice(index,1);setSetting(mentionProtectionKey,data);
+    await i.reply({content:`${role} was removed from mention protection.`,ephemeral:true,allowedMentions:{parse:[]}});return;
+  }
+  if(action==='user-add'||action==='user-remove') {
+    const user=i.options.getUser('user',true),exists=data.users.includes(user.id);
+    if(action==='user-add'&&!exists)data.users.push(user.id);
+    if(action==='user-remove'&&exists)data.users=data.users.filter(id=>id!==user.id);
+    setSetting(mentionProtectionKey,data);
+    await i.reply({content:action==='user-add'?(exists?`<@${user.id}> is already protected.`:`<@${user.id}> is now protected. Unauthorized mentions will be removed.`):(exists?`<@${user.id}> was removed from mention protection.`:'That user is not protected.'),ephemeral:true,allowedMentions:{parse:[]}});return;
+  }
+  const roles=data.roles.length?data.roles.map(entry=>`• <@&${entry.id}>`).join('\n'):'None';
+  const users=data.users.length?data.users.map(id=>`• <@${id}>`).join('\n'):'None';
+  await i.reply({content:`**Protected roles**\n${roles}\n\n**Protected users**\n${users}`,ephemeral:true,allowedMentions:{parse:[]}});
+}
 
 export async function registerCommands() {
   const rest=new REST({version:'10'}).setToken(config.DISCORD_TOKEN);
@@ -127,6 +177,7 @@ async function closeTicket(i:any,t:Ticket,reason:string) {
 }
 async function handleCommand(i:ChatInputCommandInteraction) {
   const name=i.commandName;
+  if(name==='mention-protect'){await handleMentionProtection(i);return;}
   if(name==='ticket') {
     await i.reply({content:tr('Para contactar al equipo, usa el panel de tickets publicado en el servidor.','To contact support, use the ticket panel posted in the server.'),ephemeral:true});return;
   }
@@ -358,7 +409,16 @@ client.on(Events.MessageReactionAdd,async(reaction,user)=>{
   catch(error){recordSystemError(client,error,'Forum reaction tracking');}
 });
 client.on(Events.MessageReactionRemove,(reaction,user)=>handleReactionRole(reaction,user,'remove'));
-client.once(Events.ClientReady,()=>{void recoverCommunityQueue(client).then(()=>scanActiveForumThreads(client)).catch(error=>recordSystemError(client,error,'Community queue startup'));});
+client.once(Events.ClientReady,()=>{
+  void recoverCommunityQueue(client).then(()=>scanActiveForumThreads(client)).catch(error=>recordSystemError(client,error,'Community queue startup'));
+  void (async()=>{
+    const guild=await client.guilds.fetch(config.DISCORD_GUILD_ID),data=getMentionProtection();
+    for(const entry of data.roles) {
+      const role=await guild.roles.fetch(entry.id).catch(()=>null);
+      if(role?.mentionable) await role.setMentionable(false,'Restore mention protection after restart').catch(error=>console.error(`Could not restore mention protection for role ${entry.id}`,error));
+    }
+  })().catch(error=>recordSystemError(client,error,'Mention protection startup'));
+});
 client.once(Events.ClientReady,c=>console.log(`Discord ready as ${c.user.tag}`));
 client.on(Events.Error,e=>recordSystemError(client,e,'Discord client error'));
 client.on(Events.MessageCreate,message=>{
@@ -370,4 +430,17 @@ client.on(Events.MessageCreate,message=>{
   if(!exists) addTicketEvent(ticket,message.author.id,'staff_response');
   const participated=db.prepare("SELECT 1 FROM ticket_events WHERE ticket_id=? AND type='staff_participated' AND actor_id=? LIMIT 1").get(ticket.id,message.author.id);
   if(!participated) addTicketEvent(ticket,message.author.id,'staff_participated');
+});
+client.on(Events.MessageCreate,async message=>{
+  if(!message.guild||message.author.bot||!message.member)return;
+  const data=getMentionProtection();
+  if(!data.roles.length&&!data.users.length)return;
+  if(MENTION_PROTECTION_MANAGER_ROLE_IDS.some(id=>message.member!.roles.cache.has(id)))return;
+  const protectedRoleMention=message.mentions.roles.some(role=>data.roles.some(entry=>entry.id===role.id));
+  const protectedUserMention=message.mentions.users.some(user=>data.users.includes(user.id));
+  if(!protectedRoleMention&&!protectedUserMention)return;
+  try {
+    await message.delete();
+    await message.channel.send({content:`${message.author}, your message was removed because it mentioned a protected role or user without authorization.`,allowedMentions:{users:[message.author.id]}});
+  } catch(error) {console.error('Could not remove unauthorized protected mention; check Manage Messages in this channel.',error);}
 });
